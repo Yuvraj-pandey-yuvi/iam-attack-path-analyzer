@@ -1,8 +1,9 @@
 """Offline IAM policy evaluator (Phase 1).
 
-Step 2: result types (D17, D18) and statement normalisation.
+Steps 2-3: result types (D17, D18), normalisation, wildcard matching (D20).
 """
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -87,3 +88,19 @@ def normalize_policy_document(document: dict[str, Any]) -> tuple[Statement, ...]
     if not isinstance(raw_statements, list):
         raise ValueError("Statement must be an object or a list of objects")
     return tuple(normalize_statement(raw) for raw in raw_statements)
+
+
+def _wildcard_match(pattern: str, value: str, *, ignore_case: bool) -> bool:
+    regex = re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
+    flags = re.IGNORECASE if ignore_case else 0
+    return re.fullmatch(regex, value, flags) is not None
+
+
+def action_matches(pattern: str, action: str) -> bool:
+    """IAM actions are case-insensitive: iam:attach* covers IAM:AttachUserPolicy."""
+    return _wildcard_match(pattern, action, ignore_case=True)
+
+
+def resource_matches(pattern: str, arn: str) -> bool:
+    """ARNs are case-sensitive: user/Admin and user/admin are different users."""
+    return _wildcard_match(pattern, arn, ignore_case=False)
