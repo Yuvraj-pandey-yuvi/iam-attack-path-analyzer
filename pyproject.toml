@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "iampath"
 version = "0.1.0"
 description = "Offline AWS IAM privilege-escalation path analyzer"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = ["boto3", "networkx"]
 
 [project.scripts]
