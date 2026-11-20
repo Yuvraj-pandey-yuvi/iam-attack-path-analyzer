@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Virtual environment
+.venv/
+
+# Test and tool caches
+.pytest_cache/
+.ruff_cache/
+
+# Real AWS data and generated output - never commit
+/snapshot*.json
+/out/
+
+# Secrets
+.env
+*.pem
