@@ -104,3 +104,38 @@ def action_matches(pattern: str, action: str) -> bool:
 def resource_matches(pattern: str, arn: str) -> bool:
     """ARNs are case-sensitive: user/Admin and user/admin are different users."""
     return _wildcard_match(pattern, arn, ignore_case=False)
+
+
+def _action_part_matches(statement: Statement, action: str) -> bool:
+    """Is the request's action covered by Action (any match) or NotAction (none)?"""
+    has_action = bool(statement.actions)
+    has_not_action = bool(statement.not_actions)
+    if has_action == has_not_action:
+        raise ValueError("statement needs exactly one of Action / NotAction")
+    if has_action:
+        return any(action_matches(pattern, action) for pattern in statement.actions)
+    return not any(action_matches(pattern, action) for pattern in statement.not_actions)
+
+
+def _resource_part_matches(statement: Statement, arn: str) -> bool:
+    """Is the request's ARN covered by Resource (any match) or NotResource (none)?"""
+    has_resource = bool(statement.resources)
+    has_not_resource = bool(statement.not_resources)
+    if has_resource == has_not_resource:
+        raise ValueError("statement needs exactly one of Resource / NotResource")
+    if has_resource:
+        return any(resource_matches(pattern, arn) for pattern in statement.resources)
+    return not any(
+        resource_matches(pattern, arn) for pattern in statement.not_resources
+    )
+
+
+def statement_matches(statement: Statement, action: str, arn: str) -> bool:
+    """Does this statement apply to the request? (Effect is ignored here.)
+
+    Both halves are always evaluated, so a malformed statement raises even
+    when the action half alone would already give False (D19: loud, not silent).
+    """
+    action_covered = _action_part_matches(statement, action)
+    resource_covered = _resource_part_matches(statement, arn)
+    return action_covered and resource_covered
