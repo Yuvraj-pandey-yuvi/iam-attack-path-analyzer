@@ -1,6 +1,6 @@
 """Offline IAM policy evaluator (Phase 1).
 
-Steps 2-3: result types (D17, D18), normalisation, wildcard matching (D20).
+Steps 2-5: result types (D17, D18), normalisation, matching (D20, D21), combining.
 """
 
 import re
@@ -139,3 +139,37 @@ def statement_matches(statement: Statement, action: str, arn: str) -> bool:
     action_covered = _action_part_matches(statement, action)
     resource_covered = _resource_part_matches(statement, arn)
     return action_covered and resource_covered
+
+
+def evaluate_statements(
+    statements: tuple[Statement, ...], action: str, arn: str
+) -> EvaluationResult:
+    """Combine statements: explicit Deny > Allow > implicit deny (D17, D18)."""
+    allows: list[Statement] = []
+    hard_denies: list[Statement] = []
+    soft_denies: list[Statement] = []
+
+    for statement in statements:
+        if not statement_matches(statement, action, arn):
+            continue
+        if statement.effect == "Allow":
+            allows.append(statement)
+        elif statement.has_condition:
+            soft_denies.append(statement)
+        else:
+            hard_denies.append(statement)
+
+    if hard_denies:
+        return EvaluationResult(
+            decision=Decision.EXPLICIT_DENY, matched_statements=tuple(hard_denies)
+        )
+    if not allows:
+        return EvaluationResult(decision=Decision.IMPLICIT_DENY)
+
+    has_unconditional_allow = any(not allow.has_condition for allow in allows)
+    conditional = (not has_unconditional_allow) or bool(soft_denies)
+    return EvaluationResult(
+        decision=Decision.ALLOW,
+        matched_statements=tuple(allows + soft_denies),
+        conditional=conditional,
+    )
