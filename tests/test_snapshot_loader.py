@@ -4,7 +4,12 @@ import re
 
 import pytest
 
-from iampath.snapshot import _optional_bool, _optional_key_count, _string_tuple
+from iampath.snapshot import (
+    _check_object,
+    _optional_bool,
+    _optional_key_count,
+    _string_tuple,
+)
 
 WHO = "user/erin"
 FIELD = "group_names"
@@ -121,3 +126,58 @@ def test_bool_accepts_true_false_and_missing(value):
 def test_bool_rejects_everything_else(value, message):
     with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
         _optional_bool(value, WHO, PASSWORD)
+
+
+ERIN_ARN = "arn:aws:iam::111122223333:user/erin"
+REQUIRED = frozenset({"name", "arn"})
+OPTIONAL = frozenset({"group_names", "access_key_count"})
+POSITION = "users[0]"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param({"name": "erin", "arn": ERIN_ARN}, id="required-only"),
+        pytest.param(
+            {"name": "erin", "arn": ERIN_ARN, "group_names": []},
+            id="with-optional",
+        ),
+    ],
+)
+def test_check_object_accepts_known_keys(data):
+    assert _check_object(data, POSITION, REQUIRED, OPTIONAL) is None
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        pytest.param(
+            ["erin"],
+            "users[0]: must be a JSON object, got list",
+            id="list",
+        ),
+        pytest.param(
+            {"name": "erin"},
+            "users[0]: missing required field(s): arn",
+            id="no-arn",
+        ),
+        pytest.param(
+            {},
+            "users[0]: missing required field(s): arn, name",
+            id="empty-sorted",
+        ),
+        pytest.param(
+            {"name": "erin", "arn": ERIN_ARN, "acess_key_count": 1},
+            "users[0]: unknown field(s): acess_key_count",
+            id="typo",
+        ),
+        pytest.param(
+            {"name": "erin", "arn": ERIN_ARN, "zeta": 1, "alpha": 2},
+            "users[0]: unknown field(s): alpha, zeta",
+            id="two-unknown-sorted",
+        ),
+    ],
+)
+def test_check_object_rejects(data, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _check_object(data, POSITION, REQUIRED, OPTIONAL)

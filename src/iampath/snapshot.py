@@ -141,3 +141,17 @@ def _optional_key_count(value: Any, who: str, field_name: str) -> int | None:
             f"{who}: {field_name} must be between 0 and {MAX_ACCESS_KEYS}, got {value}"
         )
     return value
+
+
+def _check_object(
+    data: Any, who: str, required: frozenset[str], optional: frozenset[str]
+) -> None:
+    """D31: a JSON object with every required key and no unknown key."""
+    if not isinstance(data, dict):
+        raise ValueError(f"{who}: must be a JSON object, got {type(data).__name__}")
+    missing = sorted(required - data.keys())
+    if missing:
+        raise ValueError(f"{who}: missing required field(s): {', '.join(missing)}")
+    unknown = sorted(data.keys() - required - optional)
+    if unknown:
+        raise ValueError(f"{who}: unknown field(s): {', '.join(unknown)}")
