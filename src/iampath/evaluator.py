@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from iampath.snapshot import Group, InlinePolicy, ManagedPolicy, Role, User
+
 
 class Decision(StrEnum):
     """Answer to "can X do action A on resource R?" (AWS's own terms)."""
@@ -173,3 +175,68 @@ def evaluate_statements(
         matched_statements=tuple(allows + soft_denies),
         conditional=conditional,
     )
+
+
+def _managed_policy_statements(
+    arn: str, policies_by_arn: dict[str, ManagedPolicy], owner: str
+) -> tuple[Statement, ...]:
+    policy = policies_by_arn.get(arn)
+    if policy is None:
+        raise ValueError(f"{owner}: managed policy {arn} not found in snapshot")
+    try:
+        return normalize_policy_document(policy.default_document)
+    except ValueError as error:
+        raise ValueError(f"{owner}: managed policy {arn}: {error}") from error
+
+
+def _attached_statements(
+    inline_policies: tuple[InlinePolicy, ...],
+    managed_arns: tuple[str, ...],
+    policies_by_arn: dict[str, ManagedPolicy],
+    owner: str,
+) -> list[Statement]:
+    pile: list[Statement] = []
+    for policy in inline_policies:
+        try:
+            pile.extend(normalize_policy_document(policy.document))
+        except ValueError as error:
+            raise ValueError(
+                f"{owner}: inline policy {policy.name}: {error}"
+            ) from error
+    for arn in managed_arns:
+        pile.extend(_managed_policy_statements(arn, policies_by_arn, owner))
+    return pile
+
+
+def gather_user_statements(
+    user: User,
+    groups_by_name: dict[str, Group],
+    policies_by_arn: dict[str, ManagedPolicy],
+) -> tuple[Statement, ...]:
+    owner = f"user/{user.name}"
+    pile = _attached_statements(
+        user.inline_policies, user.managed_arns, policies_by_arn, owner
+    )
+    for group_name in user.group_names:
+        group = groups_by_name.get(group_name)
+        if group is None:
+            raise ValueError(f"{owner}: group {group_name} not found in snapshot")
+        pile.extend(
+            _attached_statements(
+                group.inline_policies,
+                group.managed_arns,
+                policies_by_arn,
+                f"{owner} via group/{group.name}",
+            )
+        )
+    return tuple(pile)
+
+
+def gather_role_statements(
+    role: Role, policies_by_arn: dict[str, ManagedPolicy]
+) -> tuple[Statement, ...]:
+    owner = f"role/{role.name}"
+    pile = _attached_statements(
+        role.inline_policies, role.managed_arns, policies_by_arn, owner
+    )
+    return tuple(pile)
