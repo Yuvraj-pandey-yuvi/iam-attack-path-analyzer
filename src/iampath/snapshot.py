@@ -95,3 +95,18 @@ class Snapshot:
     instance_profiles: tuple[InstanceProfile, ...] = ()
     lambda_functions: tuple[LambdaFunction, ...] = ()
     ec2_instances: tuple[Ec2Instance, ...] = ()
+
+
+def _string_tuple(value: Any, who: str, field_name: str) -> tuple[str, ...]:
+    """JSON list of strings -> tuple of strings (D31). Anything else: ValueError."""
+    if not isinstance(value, list):
+        raise ValueError(
+            f"{who}: {field_name} must be a list of strings, got {type(value).__name__}"
+        )
+    for position, item in enumerate(value):
+        if not isinstance(item, str):
+            raise ValueError(
+                f"{who}: {field_name}[{position}] must be a string, "
+                f"got {type(item).__name__}"
+            )
+    return tuple(value)
