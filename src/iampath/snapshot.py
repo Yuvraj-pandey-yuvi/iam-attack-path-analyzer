@@ -110,3 +110,34 @@ def _string_tuple(value: Any, who: str, field_name: str) -> tuple[str, ...]:
                 f"got {type(item).__name__}"
             )
     return tuple(value)
+
+
+MAX_ACCESS_KEYS = 2  # AWS hard limit per IAM user (rule 10 will use it too)
+
+
+def _optional_bool(value: Any, who: str, field_name: str) -> bool | None:
+    """JSON true/false -> bool; missing/null -> None (unknown, D29)."""
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"{who}: {field_name} must be true, false or missing, "
+            f"got {type(value).__name__}"
+        )
+    return value
+
+
+def _optional_key_count(value: Any, who: str, field_name: str) -> int | None:
+    """JSON whole number 0..MAX_ACCESS_KEYS -> int; missing/null -> None (D29)."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"{who}: {field_name} must be a whole number or missing, "
+            f"got {type(value).__name__}"
+        )
+    if not 0 <= value <= MAX_ACCESS_KEYS:
+        raise ValueError(
+            f"{who}: {field_name} must be between 0 and {MAX_ACCESS_KEYS}, got {value}"
+        )
+    return value
