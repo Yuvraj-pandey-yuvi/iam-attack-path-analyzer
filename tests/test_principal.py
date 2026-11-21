@@ -171,3 +171,48 @@ ERROR_CASES = [
 def test_bad_input_raises_valueerror_naming_who_and_what(gather, message_start):
     with pytest.raises(ValueError, match="^" + re.escape(message_start)):
         gather()
+
+
+# Test #1: the NotAction trap, through the full user path (Phase 1, step 7).
+MALLORY_ARN = f"{ACCOUNT}:user/mallory"
+TRAP_ARN = f"{ACCOUNT}:policy/AllButS3"
+TRAP_DOC = doc({"Effect": "Allow", "NotAction": "s3:*", "Resource": "*"})
+TRAP_INLINE = (InlinePolicy("AllButS3", TRAP_DOC),)
+TRAP_POLICIES = {TRAP_ARN: ManagedPolicy(TRAP_ARN, TRAP_DOC)}
+
+TRAP_ROUTES = {
+    "user-inline": ({"inline_policies": TRAP_INLINE}, None),
+    "user-managed": ({"managed_arns": (TRAP_ARN,)}, None),
+    "group-inline": ({}, {"inline_policies": TRAP_INLINE}),
+    "group-managed": ({}, {"managed_arns": (TRAP_ARN,)}),
+}
+
+
+@pytest.mark.parametrize(
+    ("user_parts", "group_parts"), TRAP_ROUTES.values(), ids=TRAP_ROUTES.keys()
+)
+def test_notaction_trap_allows_attach_user_policy(user_parts, group_parts):
+    groups = {}
+    if group_parts is not None:
+        group_arn = f"{ACCOUNT}:group/Contractors"
+        groups["Contractors"] = Group("Contractors", group_arn, **group_parts)
+        user_parts = {**user_parts, "group_names": ("Contractors",)}
+    mallory = User("mallory", MALLORY_ARN, **user_parts)
+
+    pile = gather_user_statements(mallory, groups, TRAP_POLICIES)
+    attach = evaluate_statements(pile, "iam:AttachUserPolicy", MALLORY_ARN)
+    s3 = evaluate_statements(pile, "s3:PutObject", "arn:aws:s3:::payroll/q4.csv")
+
+    assert attach.decision == Decision.ALLOW
+    assert attach.conditional is False
+    assert len(attach.matched_statements) == 1
+    assert attach.matched_statements[0].not_actions == ("s3:*",)
+    assert s3.decision == Decision.IMPLICIT_DENY
+
+
+def test_role_pile_includes_managed_policies():
+    role = replace(DEPLOY, managed_arns=(DEV,))
+    expected = normalize_policy_document(DEPLOY_DOC) + normalize_policy_document(
+        DEV_DOC
+    )
+    assert gather_role_statements(role, POLICIES) == expected

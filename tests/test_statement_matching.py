@@ -103,3 +103,47 @@ BROKEN_CASES = [
 def test_broken_statement_raises(statement):
     with pytest.raises(ValueError):
         statement_matches(statement, "iam:PassRole", ADMIN_ROLE)
+
+
+# Step 7 review: lists with more than one pattern ("any" vs "none" logic).
+TWO_SERVICES_EXCLUDED = {"Effect": "Allow", "NotAction": ["s3:*", "iam:*"]}
+LIST_CASES = [
+    pytest.param(
+        {**TWO_SERVICES_EXCLUDED, "Resource": "*"},
+        "iam:CreateUser",
+        ADMIN_ROLE,
+        False,
+        id="notaction-list-second-pattern-excludes",
+    ),
+    pytest.param(
+        {**TWO_SERVICES_EXCLUDED, "Resource": "*"},
+        "ec2:RunInstances",
+        PROD_BUCKET,
+        True,
+        id="notaction-list-other-service-covered",
+    ),
+    pytest.param(
+        {"Effect": "Allow", "Action": "s3:*", "Resource": [PROD_BUCKET, LOGS_PREFIX]},
+        "s3:GetObject",
+        LOGS_FILE,
+        True,
+        id="resource-list-second-pattern-matches",
+    ),
+    pytest.param(
+        {
+            "Effect": "Allow",
+            "Action": "s3:*",
+            "NotResource": [PROD_BUCKET, LOGS_PREFIX],
+        },
+        "s3:GetObject",
+        LOGS_FILE,
+        False,
+        id="notresource-list-second-pattern-excludes",
+    ),
+]
+
+
+@pytest.mark.parametrize(("raw", "action", "arn", "expected"), LIST_CASES)
+def test_statement_matches_with_pattern_lists(raw, action, arn, expected):
+    statement = normalize_statement(raw)
+    assert statement_matches(statement, action, arn) is expected

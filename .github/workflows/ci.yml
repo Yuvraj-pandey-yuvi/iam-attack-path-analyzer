@@ -25,4 +25,4 @@ jobs:
       - name: Format check
         run: python -m ruff format --check .
       - name: Tests
-        run: python -m pytest
+        run: python -m pytest --cov
