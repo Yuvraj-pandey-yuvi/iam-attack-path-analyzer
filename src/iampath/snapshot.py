@@ -441,3 +441,53 @@ def _load_account_id(value: Any) -> str:
             f"snapshot: account_id must be exactly 12 digits, got {account_id!r}"
         )
     return account_id
+
+
+SNAPSHOT_REQUIRED = frozenset({"account_id"})
+SNAPSHOT_OPTIONAL = frozenset(
+    {
+        "users",
+        "groups",
+        "roles",
+        "managed_policies",
+        "instance_profiles",
+        "lambda_functions",
+        "ec2_instances",
+    }
+)
+
+
+def load_snapshot(data: Any) -> Snapshot:
+    """Whole snapshot JSON (already parsed) -> Snapshot (D28, D31, D32)."""
+    _check_object(data, "snapshot", SNAPSHOT_REQUIRED, SNAPSHOT_OPTIONAL)
+    account_id = _load_account_id(data["account_id"])
+    users = _load_list(data, "users", _load_user)
+    groups = _load_list(data, "groups", _load_group)
+    roles = _load_list(data, "roles", _load_role)
+    loaded_policies = _load_list(data, "managed_policies", _load_managed_policy)
+    instance_profiles = _load_list(data, "instance_profiles", _load_instance_profile)
+    lambda_functions = _load_list(data, "lambda_functions", _load_lambda_function)
+    ec2_instances = _load_list(data, "ec2_instances", _load_ec2_instance)
+    managed_policies = tuple(loaded.policy for loaded in loaded_policies)
+    _reject_duplicates(users, "users", "name")
+    _reject_duplicates(groups, "groups", "name")
+    _reject_duplicates(roles, "roles", "name")
+    _reject_duplicates(managed_policies, "managed_policies", "arn")
+    _reject_duplicates(instance_profiles, "instance_profiles", "name")
+    _reject_duplicates(lambda_functions, "lambda_functions", "arn")
+    _reject_duplicates(ec2_instances, "ec2_instances", "arn")
+    return Snapshot(
+        account_id=account_id,
+        users=users,
+        groups=groups,
+        roles=roles,
+        managed_policies=managed_policies,
+        inactive_versions_by_arn={
+            loaded.policy.arn: loaded.inactive_versions
+            for loaded in loaded_policies
+            if loaded.inactive_versions
+        },
+        instance_profiles=instance_profiles,
+        lambda_functions=lambda_functions,
+        ec2_instances=ec2_instances,
+    )
