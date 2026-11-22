@@ -6,8 +6,10 @@ import pytest
 
 from iampath.snapshot import (
     InlinePolicy,
+    User,
     _check_object,
     _load_inline_policies,
+    _load_user,
     _optional_bool,
     _optional_key_count,
     _require_string,
@@ -271,3 +273,92 @@ def test_inline_policies_load(value, expected):
 def test_inline_policies_reject(value, message):
     with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
         _load_inline_policies(value, WHO)
+
+
+DEV_ARN = "arn:aws:iam::111122223333:policy/DevAccess"
+
+
+def test_load_user_minimal_uses_defaults():
+    loaded = _load_user({"name": "erin", "arn": ERIN_ARN}, POSITION)
+    assert loaded == User(name="erin", arn=ERIN_ARN)
+
+
+def test_load_user_reads_every_field():
+    data = {
+        "name": "erin",
+        "arn": ERIN_ARN,
+        "inline_policies": [{"name": "Ec2", "document": EC2_DOC}],
+        "managed_arns": [DEV_ARN],
+        "group_names": ["Developers"],
+        "access_key_count": 1,
+        "has_console_password": True,
+    }
+    assert _load_user(data, POSITION) == User(
+        name="erin",
+        arn=ERIN_ARN,
+        inline_policies=(InlinePolicy(name="Ec2", document=EC2_DOC),),
+        managed_arns=(DEV_ARN,),
+        group_names=("Developers",),
+        access_key_count=1,
+        has_console_password=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        pytest.param(
+            ["erin"],
+            "users[0]: must be a JSON object, got list",
+            id="not-object",
+        ),
+        pytest.param(
+            {"arn": ERIN_ARN},
+            "users[0]: missing required field(s): name",
+            id="no-name",
+        ),
+        pytest.param(
+            {"name": 42, "arn": ERIN_ARN},
+            "users[0]: name must be non-empty text, got 42",
+            id="name-not-text",
+        ),
+        pytest.param(
+            {"name": "erin", "arn": ""},
+            "user/erin: arn must be non-empty text, got ''",
+            id="empty-arn",
+        ),
+        pytest.param(
+            {"name": "erin", "arn": ERIN_ARN, "acess_key_count": 1},
+            "users[0]: unknown field(s): acess_key_count",
+            id="typo",
+        ),
+        pytest.param(
+            {"name": "erin", "arn": ERIN_ARN, "inline_policies": [{"name": "Ec2"}]},
+            "user/erin inline_policies[0]: missing required field(s): document",
+            id="bad-inline-policy",
+        ),
+        pytest.param(
+            {"name": "erin", "arn": ERIN_ARN, "managed_arns": DEV_ARN},
+            "user/erin: managed_arns must be a list of strings, got str",
+            id="managed-not-list",
+        ),
+        pytest.param(
+            {"name": "erin", "arn": ERIN_ARN, "group_names": "Developers"},
+            "user/erin: group_names must be a list of strings, got str",
+            id="groups-not-list",
+        ),
+        pytest.param(
+            {"name": "erin", "arn": ERIN_ARN, "access_key_count": True},
+            "user/erin: access_key_count must be a whole number or missing, got bool",
+            id="key-count-bool",
+        ),
+        pytest.param(
+            {"name": "erin", "arn": ERIN_ARN, "has_console_password": "yes"},
+            "user/erin: has_console_password must be true, false or missing, got str",
+            id="password-text",
+        ),
+    ],
+)
+def test_load_user_rejects(data, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_user(data, POSITION)
