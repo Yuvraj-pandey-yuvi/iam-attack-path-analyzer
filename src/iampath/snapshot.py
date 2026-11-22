@@ -289,3 +289,52 @@ def _load_role(data: Any, position: str) -> Role:
         inline_policies=basics.inline_policies,
         managed_arns=basics.managed_arns,
     )
+
+
+POLICY_VERSION_FIELDS = frozenset({"version_id", "document"})
+
+
+def _load_policy_versions(value: Any, who: str) -> tuple[PolicyVersion, ...]:
+    """JSON list of {"version_id", "document"} objects -> tuple (D28, D32)."""
+    if not isinstance(value, list):
+        raise ValueError(
+            f"{who}: inactive_versions must be a list, got {type(value).__name__}"
+        )
+    versions = []
+    for position, item in enumerate(value):
+        label = f"{who} inactive_versions[{position}]"
+        _check_object(item, label, POLICY_VERSION_FIELDS, frozenset())
+        version_id = _require_string(item["version_id"], label, "version_id")
+        document = _require_document(
+            item["document"], f"{who} version {version_id}", "document"
+        )
+        versions.append(PolicyVersion(version_id=version_id, document=document))
+    return tuple(versions)
+
+
+MANAGED_POLICY_REQUIRED = frozenset({"arn", "default_document"})
+MANAGED_POLICY_OPTIONAL = frozenset({"inactive_versions"})
+
+
+@dataclass(frozen=True)
+class _LoadedManagedPolicy:
+    """A managed policy and its inactive versions, kept apart (D28, D32)."""
+
+    policy: ManagedPolicy
+    inactive_versions: tuple[PolicyVersion, ...]
+
+
+def _load_managed_policy(data: Any, position: str) -> _LoadedManagedPolicy:
+    """One JSON managed policy -> policy + its inactive versions, separated (D32)."""
+    _check_object(data, position, MANAGED_POLICY_REQUIRED, MANAGED_POLICY_OPTIONAL)
+    arn = _require_string(data["arn"], position, "arn")
+    who = f"policy {arn}"
+    return _LoadedManagedPolicy(
+        policy=ManagedPolicy(
+            arn=arn,
+            default_document=_require_document(
+                data["default_document"], who, "default_document"
+            ),
+        ),
+        inactive_versions=_load_policy_versions(data.get("inactive_versions", []), who),
+    )

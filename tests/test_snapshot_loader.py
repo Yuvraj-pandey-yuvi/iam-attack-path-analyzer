@@ -1,5 +1,6 @@
 """Phase 2 step 1: snapshot loader helpers (D31)."""
 
+import dataclasses
 import re
 
 import pytest
@@ -7,11 +8,15 @@ import pytest
 from iampath.snapshot import (
     Group,
     InlinePolicy,
+    ManagedPolicy,
+    PolicyVersion,
     Role,
     User,
     _check_object,
     _load_group,
     _load_inline_policies,
+    _load_managed_policy,
+    _load_policy_versions,
     _load_role,
     _load_user,
     _optional_bool,
@@ -504,3 +509,105 @@ def test_load_role_reads_every_field():
 def test_load_role_rejects(data, message):
     with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
         _load_role(data, "roles[0]")
+
+
+V1_DOC = {"Statement": [{"Effect": "Allow", "Action": "iam:*", "Resource": "*"}]}
+POLICY_WHO = f"policy {DEV_ARN}"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param([], (), id="none"),
+        pytest.param(
+            [{"version_id": "v1", "document": V1_DOC}],
+            (PolicyVersion(version_id="v1", document=V1_DOC),),
+            id="one",
+        ),
+    ],
+)
+def test_policy_versions_load(value, expected):
+    assert _load_policy_versions(value, POLICY_WHO) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        pytest.param(
+            {"version_id": "v1"},
+            f"{POLICY_WHO}: inactive_versions must be a list, got dict",
+            id="not-a-list",
+        ),
+        pytest.param(
+            [{"version_id": "v1"}],
+            f"{POLICY_WHO} inactive_versions[0]: missing required field(s): document",
+            id="no-document",
+        ),
+        pytest.param(
+            [{"version_id": "", "document": V1_DOC}],
+            f"{POLICY_WHO} inactive_versions[0]: "
+            "version_id must be non-empty text, got ''",
+            id="empty-version-id",
+        ),
+        pytest.param(
+            [{"version_id": "v1", "document": ["Statement"]}],
+            f"{POLICY_WHO} version v1: document must be a JSON object, got list",
+            id="document-not-object",
+        ),
+    ],
+)
+def test_policy_versions_reject(value, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_policy_versions(value, POLICY_WHO)
+
+
+def test_load_managed_policy_minimal():
+    data = {"arn": DEV_ARN, "default_document": EC2_DOC}
+    loaded = _load_managed_policy(data, "managed_policies[0]")
+    assert loaded.policy == ManagedPolicy(arn=DEV_ARN, default_document=EC2_DOC)
+    assert loaded.inactive_versions == ()
+
+
+def test_load_managed_policy_keeps_old_versions_apart():
+    data = {
+        "arn": DEV_ARN,
+        "default_document": EC2_DOC,
+        "inactive_versions": [{"version_id": "v1", "document": V1_DOC}],
+    }
+    loaded = _load_managed_policy(data, "managed_policies[0]")
+    assert loaded.policy == ManagedPolicy(arn=DEV_ARN, default_document=EC2_DOC)
+    assert loaded.inactive_versions == (
+        PolicyVersion(version_id="v1", document=V1_DOC),
+    )
+    policy_fields = {field.name for field in dataclasses.fields(ManagedPolicy)}
+    assert policy_fields == {"arn", "default_document"}
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        pytest.param(
+            {"arn": DEV_ARN},
+            "managed_policies[0]: missing required field(s): default_document",
+            id="no-default-document",
+        ),
+        pytest.param(
+            {"arn": 7, "default_document": EC2_DOC},
+            "managed_policies[0]: arn must be non-empty text, got 7",
+            id="arn-not-text",
+        ),
+        pytest.param(
+            {"arn": DEV_ARN, "default_document": EC2_DOC, "inactive_version": []},
+            "managed_policies[0]: unknown field(s): inactive_version",
+            id="typo",
+        ),
+        pytest.param(
+            {"arn": DEV_ARN, "default_document": ["Statement"]},
+            f"{POLICY_WHO}: default_document must be a JSON object, got list",
+            id="default-not-object",
+        ),
+    ],
+)
+def test_load_managed_policy_rejects(data, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_managed_policy(data, "managed_policies[0]")
