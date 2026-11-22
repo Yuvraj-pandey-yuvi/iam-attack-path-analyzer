@@ -200,27 +200,51 @@ USER_OPTIONAL = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class _IdentityBasics:
+    """The fields every user, group and role has, already checked (D31)."""
+
+    name: str
+    arn: str
+    who: str
+    inline_policies: tuple[InlinePolicy, ...]
+    managed_arns: tuple[str, ...]
+
+
+def _load_identity_basics(
+    data: Any,
+    position: str,
+    kind: str,
+    required: frozenset[str],
+    optional: frozenset[str],
+) -> _IdentityBasics:
+    """Shared first half of the user/group/role loaders (D31)."""
+    _check_object(data, position, required, optional)
+    name = _require_string(data["name"], position, "name")
+    who = f"{kind}/{name}"
+    return _IdentityBasics(
+        name=name,
+        arn=_require_string(data["arn"], who, "arn"),
+        who=who,
+        inline_policies=_load_inline_policies(data.get("inline_policies", []), who),
+        managed_arns=_string_tuple(data.get("managed_arns", []), who, "managed_arns"),
+    )
+
+
 def _load_user(data: Any, position: str) -> User:
     """One JSON user object -> User (D29, D31). Errors name the user."""
-    _check_object(data, position, USER_REQUIRED, USER_OPTIONAL)
-    name = _require_string(data["name"], position, "name")
-    who = f"user/{name}"
-    arn = _require_string(data["arn"], who, "arn")
-    inline_policies = _load_inline_policies(data.get("inline_policies", []), who)
-    managed_arns = _string_tuple(data.get("managed_arns", []), who, "managed_arns")
-    group_names = _string_tuple(data.get("group_names", []), who, "group_names")
-    access_key_count = _optional_key_count(
-        data.get("access_key_count"), who, "access_key_count"
-    )
-    has_console_password = _optional_bool(
-        data.get("has_console_password"), who, "has_console_password"
-    )
+    basics = _load_identity_basics(data, position, "user", USER_REQUIRED, USER_OPTIONAL)
+    who = basics.who
     return User(
-        name=name,
-        arn=arn,
-        inline_policies=inline_policies,
-        managed_arns=managed_arns,
-        group_names=group_names,
-        access_key_count=access_key_count,
-        has_console_password=has_console_password,
+        name=basics.name,
+        arn=basics.arn,
+        inline_policies=basics.inline_policies,
+        managed_arns=basics.managed_arns,
+        group_names=_string_tuple(data.get("group_names", []), who, "group_names"),
+        access_key_count=_optional_key_count(
+            data.get("access_key_count"), who, "access_key_count"
+        ),
+        has_console_password=_optional_bool(
+            data.get("has_console_password"), who, "has_console_password"
+        ),
     )
