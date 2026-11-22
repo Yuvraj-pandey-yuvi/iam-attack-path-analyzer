@@ -5,6 +5,8 @@ Policy documents are stored raw, exactly as collected; the evaluator
 normalises them when it needs them (D25).
 """
 
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -401,3 +403,41 @@ def _load_ec2_instance(data: Any, position: str) -> Ec2Instance:
         # missing = unknown (D29/D30)
         ssm_managed=_optional_bool(data.get("ssm_managed"), who, "ssm_managed"),
     )
+
+
+def _load_list(
+    data: dict[str, Any], list_name: str, loader: Callable[[Any, str], Any]
+) -> tuple[Any, ...]:
+    """Top-level JSON list -> tuple; each item gets its position label (D31)."""
+    value = data.get(list_name, [])
+    if not isinstance(value, list):
+        raise ValueError(
+            f"snapshot: {list_name} must be a list, got {type(value).__name__}"
+        )
+    items = []
+    for position, item in enumerate(value):
+        items.append(loader(item, f"{list_name}[{position}]"))
+    return tuple(items)
+
+
+def _reject_duplicates(items: tuple[Any, ...], list_name: str, key_name: str) -> None:
+    """Two entries with the same name/ARN would make every lookup ambiguous (D31)."""
+    seen = set()
+    for item in items:
+        key = getattr(item, key_name)
+        if key in seen:
+            raise ValueError(f"snapshot: {list_name} has duplicate {key_name} {key!r}")
+        seen.add(key)
+
+
+ACCOUNT_ID_PATTERN = re.compile(r"[0-9]{12}")
+
+
+def _load_account_id(value: Any) -> str:
+    """AWS account IDs are always exactly 12 ASCII digits (D31)."""
+    account_id = _require_string(value, "snapshot", "account_id")
+    if not ACCOUNT_ID_PATTERN.fullmatch(account_id):
+        raise ValueError(
+            f"snapshot: account_id must be exactly 12 digits, got {account_id!r}"
+        )
+    return account_id

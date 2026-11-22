@@ -16,11 +16,13 @@ from iampath.snapshot import (
     Role,
     User,
     _check_object,
+    _load_account_id,
     _load_ec2_instance,
     _load_group,
     _load_inline_policies,
     _load_instance_profile,
     _load_lambda_function,
+    _load_list,
     _load_managed_policy,
     _load_policy_versions,
     _load_role,
@@ -28,6 +30,7 @@ from iampath.snapshot import (
     _optional_bool,
     _optional_key_count,
     _optional_string,
+    _reject_duplicates,
     _require_document,
     _require_string,
     _string_tuple,
@@ -776,3 +779,82 @@ def test_load_ec2_instance_reads_every_field():
 def test_load_ec2_instance_rejects(data, message):
     with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
         _load_ec2_instance(data, "ec2_instances[0]")
+
+
+FRANK_ARN = "arn:aws:iam::111122223333:user/frank"
+DEVANAGARI_TWELVE = "\u0967" * 12  # U+0967 = Devanagari digit one (not ASCII)
+
+
+def test_load_list_missing_key_is_empty():
+    assert _load_list({}, "users", _load_user) == ()
+
+
+def test_load_list_passes_each_item_its_position():
+    data = {"users": ["a", "b"]}
+    loaded = _load_list(data, "users", lambda item, position: (position, item))
+    assert loaded == (("users[0]", "a"), ("users[1]", "b"))
+
+
+def test_load_list_rejects_non_list():
+    message = "snapshot: users must be a list, got dict"
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_list({"users": {}}, "users", _load_user)
+
+
+def test_load_list_errors_name_the_position():
+    data = {"users": [{"name": "erin", "arn": ERIN_ARN}, {"name": "frank"}]}
+    message = "users[1]: missing required field(s): arn"
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_list(data, "users", _load_user)
+
+
+def test_reject_duplicates_accepts_unique_names():
+    users = (User(name="erin", arn=ERIN_ARN), User(name="frank", arn=FRANK_ARN))
+    assert _reject_duplicates(users, "users", "name") is None
+
+
+def test_reject_duplicates_names_the_duplicate():
+    users = (User(name="erin", arn=ERIN_ARN), User(name="erin", arn=ERIN_ARN))
+    message = "snapshot: users has duplicate name 'erin'"
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _reject_duplicates(users, "users", "name")
+
+
+def test_account_id_accepts_twelve_digits():
+    assert _load_account_id("111122223333") == "111122223333"
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        pytest.param(
+            "12345",
+            "snapshot: account_id must be exactly 12 digits, got '12345'",
+            id="too-short",
+        ),
+        pytest.param(
+            "1111222233334",
+            "snapshot: account_id must be exactly 12 digits, got '1111222233334'",
+            id="too-long",
+        ),
+        pytest.param(
+            "11112222333a",
+            "snapshot: account_id must be exactly 12 digits, got '11112222333a'",
+            id="letter",
+        ),
+        pytest.param(
+            DEVANAGARI_TWELVE,
+            "snapshot: account_id must be exactly 12 digits, "
+            f"got '{DEVANAGARI_TWELVE}'",
+            id="devanagari-digits",
+        ),
+        pytest.param(
+            111122223333,
+            "snapshot: account_id must be non-empty text, got 111122223333",
+            id="number-not-text",
+        ),
+    ],
+)
+def test_account_id_rejects(value, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_account_id(value)
