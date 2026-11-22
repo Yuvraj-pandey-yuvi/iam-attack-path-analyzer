@@ -6,21 +6,28 @@ import re
 import pytest
 
 from iampath.snapshot import (
+    Ec2Instance,
     Group,
     InlinePolicy,
+    InstanceProfile,
+    LambdaFunction,
     ManagedPolicy,
     PolicyVersion,
     Role,
     User,
     _check_object,
+    _load_ec2_instance,
     _load_group,
     _load_inline_policies,
+    _load_instance_profile,
+    _load_lambda_function,
     _load_managed_policy,
     _load_policy_versions,
     _load_role,
     _load_user,
     _optional_bool,
     _optional_key_count,
+    _optional_string,
     _require_document,
     _require_string,
     _string_tuple,
@@ -611,3 +618,161 @@ def test_load_managed_policy_keeps_old_versions_apart():
 def test_load_managed_policy_rejects(data, message):
     with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
         _load_managed_policy(data, "managed_policies[0]")
+
+
+PROFILE_ARN = "arn:aws:iam::111122223333:instance-profile/WebProfile"
+FUNCTION_ARN = "arn:aws:lambda:us-east-1:111122223333:function:Deployer"
+INSTANCE_ARN = "arn:aws:ec2:us-east-1:111122223333:instance/i-0abc123"
+
+
+@pytest.mark.parametrize("value", [None, "x"])
+def test_optional_string_accepts_missing_or_text(value):
+    assert _optional_string(value, WHO, "field") == value
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        pytest.param(
+            "",
+            "user/erin: field must be non-empty text, got ''",
+            id="empty",
+        ),
+        pytest.param(
+            5,
+            "user/erin: field must be non-empty text, got 5",
+            id="number",
+        ),
+    ],
+)
+def test_optional_string_rejects(value, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _optional_string(value, WHO, "field")
+
+
+def test_load_instance_profile_without_role():
+    data = {"name": "WebProfile", "arn": PROFILE_ARN}
+    loaded = _load_instance_profile(data, "instance_profiles[0]")
+    assert loaded == InstanceProfile(name="WebProfile", arn=PROFILE_ARN)
+
+
+def test_load_instance_profile_with_one_role():
+    data = {"name": "WebProfile", "arn": PROFILE_ARN, "role_names": ["WebRole"]}
+    loaded = _load_instance_profile(data, "instance_profiles[0]")
+    assert loaded == InstanceProfile(
+        name="WebProfile", arn=PROFILE_ARN, role_names=("WebRole",)
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        pytest.param(
+            {"name": "WebProfile", "arn": PROFILE_ARN, "role_names": ["A", "B"]},
+            "instance-profile/WebProfile: role_names can hold at most 1 role, got 2",
+            id="two-roles",
+        ),
+        pytest.param(
+            {"name": "WebProfile"},
+            "instance_profiles[0]: missing required field(s): arn",
+            id="no-arn",
+        ),
+        pytest.param(
+            {"name": "WebProfile", "arn": PROFILE_ARN, "role_names": "WebRole"},
+            "instance-profile/WebProfile: "
+            "role_names must be a list of strings, got str",
+            id="roles-not-list",
+        ),
+    ],
+)
+def test_load_instance_profile_rejects(data, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_instance_profile(data, "instance_profiles[0]")
+
+
+def test_load_lambda_function():
+    data = {"name": "Deployer", "arn": FUNCTION_ARN, "role_arn": DEPLOY_ARN}
+    assert _load_lambda_function(data, "lambda_functions[0]") == LambdaFunction(
+        name="Deployer", arn=FUNCTION_ARN, role_arn=DEPLOY_ARN
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        pytest.param(
+            {"name": "Deployer", "arn": FUNCTION_ARN},
+            "lambda_functions[0]: missing required field(s): role_arn",
+            id="no-role",
+        ),
+        pytest.param(
+            {"name": "Deployer", "arn": FUNCTION_ARN, "role_arn": ""},
+            "function/Deployer: role_arn must be non-empty text, got ''",
+            id="empty-role",
+        ),
+        pytest.param(
+            {
+                "name": "Deployer",
+                "arn": FUNCTION_ARN,
+                "role_arn": DEPLOY_ARN,
+                "runtime": "python3.14",
+            },
+            "lambda_functions[0]: unknown field(s): runtime",
+            id="unknown-field",
+        ),
+    ],
+)
+def test_load_lambda_function_rejects(data, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_lambda_function(data, "lambda_functions[0]")
+
+
+def test_load_ec2_instance_minimal_means_no_profile_and_unknown_ssm():
+    data = {"instance_id": "i-0abc123", "arn": INSTANCE_ARN}
+    loaded = _load_ec2_instance(data, "ec2_instances[0]")
+    assert loaded.instance_profile_arn is None
+    assert loaded.ssm_managed is None
+
+
+def test_load_ec2_instance_reads_every_field():
+    data = {
+        "instance_id": "i-0abc123",
+        "arn": INSTANCE_ARN,
+        "instance_profile_arn": PROFILE_ARN,
+        "ssm_managed": True,
+    }
+    assert _load_ec2_instance(data, "ec2_instances[0]") == Ec2Instance(
+        instance_id="i-0abc123",
+        arn=INSTANCE_ARN,
+        instance_profile_arn=PROFILE_ARN,
+        ssm_managed=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        pytest.param(
+            {"arn": INSTANCE_ARN},
+            "ec2_instances[0]: missing required field(s): instance_id",
+            id="no-instance-id",
+        ),
+        pytest.param(
+            {"instance_id": "i-0abc123", "arn": INSTANCE_ARN, "ssm_managed": "yes"},
+            "instance/i-0abc123: ssm_managed must be true, false or missing, got str",
+            id="ssm-text",
+        ),
+        pytest.param(
+            {
+                "instance_id": "i-0abc123",
+                "arn": INSTANCE_ARN,
+                "instance_profile_arn": 42,
+            },
+            "instance/i-0abc123: instance_profile_arn must be non-empty text, got 42",
+            id="profile-not-text",
+        ),
+    ],
+)
+def test_load_ec2_instance_rejects(data, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_ec2_instance(data, "ec2_instances[0]")

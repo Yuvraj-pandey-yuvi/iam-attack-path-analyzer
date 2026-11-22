@@ -338,3 +338,66 @@ def _load_managed_policy(data: Any, position: str) -> _LoadedManagedPolicy:
         ),
         inactive_versions=_load_policy_versions(data.get("inactive_versions", []), who),
     )
+
+
+def _optional_string(value: Any, who: str, field_name: str) -> str | None:
+    """Optional JSON text field: missing/null -> None, else non-empty text (D31)."""
+    if value is None:
+        return None
+    return _require_string(value, who, field_name)
+
+
+MAX_ROLES_PER_INSTANCE_PROFILE = 1  # AWS hard limit
+INSTANCE_PROFILE_REQUIRED = frozenset({"name", "arn"})
+INSTANCE_PROFILE_OPTIONAL = frozenset({"role_names"})
+
+
+def _load_instance_profile(data: Any, position: str) -> InstanceProfile:
+    """One JSON instance profile -> InstanceProfile (D29, D31)."""
+    _check_object(data, position, INSTANCE_PROFILE_REQUIRED, INSTANCE_PROFILE_OPTIONAL)
+    name = _require_string(data["name"], position, "name")
+    who = f"instance-profile/{name}"
+    arn = _require_string(data["arn"], who, "arn")
+    role_names = _string_tuple(data.get("role_names", []), who, "role_names")
+    if len(role_names) > MAX_ROLES_PER_INSTANCE_PROFILE:
+        raise ValueError(
+            f"{who}: role_names can hold at most {MAX_ROLES_PER_INSTANCE_PROFILE} "
+            f"role, got {len(role_names)}"
+        )
+    return InstanceProfile(name=name, arn=arn, role_names=role_names)
+
+
+LAMBDA_FUNCTION_FIELDS = frozenset({"name", "arn", "role_arn"})
+
+
+def _load_lambda_function(data: Any, position: str) -> LambdaFunction:
+    """One JSON Lambda function -> LambdaFunction (D29, D31)."""
+    _check_object(data, position, LAMBDA_FUNCTION_FIELDS, frozenset())
+    name = _require_string(data["name"], position, "name")
+    who = f"function/{name}"
+    return LambdaFunction(
+        name=name,
+        arn=_require_string(data["arn"], who, "arn"),
+        role_arn=_require_string(data["role_arn"], who, "role_arn"),
+    )
+
+
+EC2_INSTANCE_REQUIRED = frozenset({"instance_id", "arn"})
+EC2_INSTANCE_OPTIONAL = frozenset({"instance_profile_arn", "ssm_managed"})
+
+
+def _load_ec2_instance(data: Any, position: str) -> Ec2Instance:
+    """One JSON EC2 instance -> Ec2Instance (D29, D30, D31)."""
+    _check_object(data, position, EC2_INSTANCE_REQUIRED, EC2_INSTANCE_OPTIONAL)
+    instance_id = _require_string(data["instance_id"], position, "instance_id")
+    who = f"instance/{instance_id}"
+    return Ec2Instance(
+        instance_id=instance_id,
+        arn=_require_string(data["arn"], who, "arn"),
+        # missing = no profile attached (always known; see the class comment)
+        instance_profile_arn=_optional_string(
+            data.get("instance_profile_arn"), who, "instance_profile_arn"
+        ),
+        # missing = unknown (D29/D30)
+        ssm_managed=_optional_bool(data.get("ssm_managed"), who, "ssm_managed"),
+    )
