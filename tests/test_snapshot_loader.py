@@ -5,13 +5,18 @@ import re
 import pytest
 
 from iampath.snapshot import (
+    Group,
     InlinePolicy,
+    Role,
     User,
     _check_object,
+    _load_group,
     _load_inline_policies,
+    _load_role,
     _load_user,
     _optional_bool,
     _optional_key_count,
+    _require_document,
     _require_string,
     _string_tuple,
 )
@@ -362,3 +367,140 @@ def test_load_user_reads_every_field():
 def test_load_user_rejects(data, message):
     with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
         _load_user(data, POSITION)
+
+
+DEVELOPERS_ARN = "arn:aws:iam::111122223333:group/Developers"
+DEPLOY_ARN = "arn:aws:iam::111122223333:role/DeployRole"
+TRUST_DOC = {
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {"AWS": ERIN_ARN},
+            "Action": "sts:AssumeRole",
+        }
+    ]
+}
+
+
+def test_require_document_returns_the_same_dict():
+    result = _require_document(TRUST_DOC, "role/DeployRole", "trust_document")
+    assert result is TRUST_DOC
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        pytest.param(
+            ["Statement"],
+            "role/DeployRole: trust_document must be a JSON object, got list",
+            id="list",
+        ),
+        pytest.param(
+            None,
+            "role/DeployRole: trust_document must be a JSON object, got NoneType",
+            id="null",
+        ),
+    ],
+)
+def test_require_document_rejects(value, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _require_document(value, "role/DeployRole", "trust_document")
+
+
+def test_load_group_minimal_uses_defaults():
+    loaded = _load_group({"name": "Developers", "arn": DEVELOPERS_ARN}, "groups[0]")
+    assert loaded == Group(name="Developers", arn=DEVELOPERS_ARN)
+
+
+def test_load_group_reads_every_field():
+    data = {
+        "name": "Developers",
+        "arn": DEVELOPERS_ARN,
+        "inline_policies": [{"name": "Ec2", "document": EC2_DOC}],
+        "managed_arns": [DEV_ARN],
+    }
+    assert _load_group(data, "groups[0]") == Group(
+        name="Developers",
+        arn=DEVELOPERS_ARN,
+        inline_policies=(InlinePolicy(name="Ec2", document=EC2_DOC),),
+        managed_arns=(DEV_ARN,),
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        pytest.param(
+            {"name": "Developers"},
+            "groups[0]: missing required field(s): arn",
+            id="no-arn",
+        ),
+        pytest.param(
+            {"name": "Developers", "arn": DEVELOPERS_ARN, "group_names": ["Admins"]},
+            "groups[0]: unknown field(s): group_names",
+            id="groups-cannot-contain-groups",
+        ),
+        pytest.param(
+            {"name": "Developers", "arn": DEVELOPERS_ARN, "managed_arns": DEV_ARN},
+            "group/Developers: managed_arns must be a list of strings, got str",
+            id="label-says-group",
+        ),
+    ],
+)
+def test_load_group_rejects(data, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_group(data, "groups[0]")
+
+
+def test_load_role_minimal_keeps_trust_document_raw():
+    data = {"name": "DeployRole", "arn": DEPLOY_ARN, "trust_document": TRUST_DOC}
+    assert _load_role(data, "roles[0]") == Role(
+        name="DeployRole", arn=DEPLOY_ARN, trust_document=TRUST_DOC
+    )
+
+
+def test_load_role_reads_every_field():
+    data = {
+        "name": "DeployRole",
+        "arn": DEPLOY_ARN,
+        "trust_document": TRUST_DOC,
+        "inline_policies": [{"name": "Ec2", "document": EC2_DOC}],
+        "managed_arns": [DEV_ARN],
+    }
+    assert _load_role(data, "roles[0]") == Role(
+        name="DeployRole",
+        arn=DEPLOY_ARN,
+        trust_document=TRUST_DOC,
+        inline_policies=(InlinePolicy(name="Ec2", document=EC2_DOC),),
+        managed_arns=(DEV_ARN,),
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        pytest.param(
+            {"name": "DeployRole", "arn": DEPLOY_ARN},
+            "roles[0]: missing required field(s): trust_document",
+            id="no-trust-document",
+        ),
+        pytest.param(
+            {"name": "DeployRole", "arn": DEPLOY_ARN, "trust_document": ["x"]},
+            "role/DeployRole: trust_document must be a JSON object, got list",
+            id="trust-not-object",
+        ),
+        pytest.param(
+            {
+                "name": "DeployRole",
+                "arn": DEPLOY_ARN,
+                "trust_document": TRUST_DOC,
+                "group_names": ["Developers"],
+            },
+            "roles[0]: unknown field(s): group_names",
+            id="roles-have-no-groups",
+        ),
+    ],
+)
+def test_load_role_rejects(data, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_role(data, "roles[0]")

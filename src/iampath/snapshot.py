@@ -178,12 +178,9 @@ def _load_inline_policies(value: Any, who: str) -> tuple[InlinePolicy, ...]:
         label = f"{who} inline_policies[{position}]"
         _check_object(item, label, INLINE_POLICY_FIELDS, frozenset())
         name = _require_string(item["name"], label, "name")
-        document = item["document"]
-        if not isinstance(document, dict):
-            raise ValueError(
-                f"{who} inline policy {name}: document must be a JSON object, "
-                f"got {type(document).__name__}"
-            )
+        document = _require_document(
+            item["document"], f"{who} inline policy {name}", "document"
+        )
         policies.append(InlinePolicy(name=name, document=document))
     return tuple(policies)
 
@@ -247,4 +244,48 @@ def _load_user(data: Any, position: str) -> User:
         has_console_password=_optional_bool(
             data.get("has_console_password"), who, "has_console_password"
         ),
+    )
+
+
+def _require_document(value: Any, who: str, field_name: str) -> PolicyDocument:
+    """Policy document: must be a JSON object; contents are checked later (D25)."""
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"{who}: {field_name} must be a JSON object, got {type(value).__name__}"
+        )
+    return value
+
+
+GROUP_REQUIRED = frozenset({"name", "arn"})
+GROUP_OPTIONAL = frozenset({"inline_policies", "managed_arns"})
+
+
+def _load_group(data: Any, position: str) -> Group:
+    """One JSON group object -> Group (D31)."""
+    basics = _load_identity_basics(
+        data, position, "group", GROUP_REQUIRED, GROUP_OPTIONAL
+    )
+    return Group(
+        name=basics.name,
+        arn=basics.arn,
+        inline_policies=basics.inline_policies,
+        managed_arns=basics.managed_arns,
+    )
+
+
+ROLE_REQUIRED = frozenset({"name", "arn", "trust_document"})
+ROLE_OPTIONAL = frozenset({"inline_policies", "managed_arns"})
+
+
+def _load_role(data: Any, position: str) -> Role:
+    """One JSON role object -> Role (D23, D31). Trust policy kept raw."""
+    basics = _load_identity_basics(data, position, "role", ROLE_REQUIRED, ROLE_OPTIONAL)
+    return Role(
+        name=basics.name,
+        arn=basics.arn,
+        trust_document=_require_document(
+            data["trust_document"], basics.who, "trust_document"
+        ),
+        inline_policies=basics.inline_policies,
+        managed_arns=basics.managed_arns,
     )
