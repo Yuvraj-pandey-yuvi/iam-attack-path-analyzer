@@ -491,3 +491,42 @@ def load_snapshot(data: Any) -> Snapshot:
         lambda_functions=lambda_functions,
         ec2_instances=ec2_instances,
     )
+
+
+def _dump_inline_policies(policies: tuple[InlinePolicy, ...]) -> list[dict[str, Any]]:
+    """InlinePolicy tuple -> JSON list (inverse of _load_inline_policies)."""
+    return [{"name": policy.name, "document": policy.document} for policy in policies]
+
+
+def _dump_user(user: User) -> dict[str, Any]:
+    """User -> JSON object; every field written, None as null (D33)."""
+    return {
+        "name": user.name,
+        "arn": user.arn,
+        "inline_policies": _dump_inline_policies(user.inline_policies),
+        "managed_arns": list(user.managed_arns),
+        "group_names": list(user.group_names),
+        "access_key_count": user.access_key_count,
+        "has_console_password": user.has_console_password,
+    }
+
+
+def _dump_group(group: Group) -> dict[str, Any]:
+    """Group -> JSON object (inverse of _load_group)."""
+    return {
+        "name": group.name,
+        "arn": group.arn,
+        "inline_policies": _dump_inline_policies(group.inline_policies),
+        "managed_arns": list(group.managed_arns),
+    }
+
+
+def _dump_role(role: Role) -> dict[str, Any]:
+    """Role -> JSON object; trust policy written raw (inverse of _load_role)."""
+    return {
+        "name": role.name,
+        "arn": role.arn,
+        "trust_document": role.trust_document,
+        "inline_policies": _dump_inline_policies(role.inline_policies),
+        "managed_arns": list(role.managed_arns),
+    }
