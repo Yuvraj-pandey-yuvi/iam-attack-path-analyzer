@@ -530,3 +530,46 @@ def _dump_role(role: Role) -> dict[str, Any]:
         "inline_policies": _dump_inline_policies(role.inline_policies),
         "managed_arns": list(role.managed_arns),
     }
+
+
+def _dump_policy_versions(versions: tuple[PolicyVersion, ...]) -> list[dict[str, Any]]:
+    """PolicyVersion tuple -> JSON list (inverse of _load_policy_versions)."""
+    return [
+        {"version_id": version.version_id, "document": version.document}
+        for version in versions
+    ]
+
+
+def _dump_managed_policy(
+    policy: ManagedPolicy, inactive_versions: tuple[PolicyVersion, ...]
+) -> dict[str, Any]:
+    """Policy + its versions -> ONE JSON object, versions nested inside (D32, D33)."""
+    return {
+        "arn": policy.arn,
+        "default_document": policy.default_document,
+        "inactive_versions": _dump_policy_versions(inactive_versions),
+    }
+
+
+def _dump_instance_profile(profile: InstanceProfile) -> dict[str, Any]:
+    """InstanceProfile -> JSON object (inverse of _load_instance_profile)."""
+    return {
+        "name": profile.name,
+        "arn": profile.arn,
+        "role_names": list(profile.role_names),
+    }
+
+
+def _dump_lambda_function(function: LambdaFunction) -> dict[str, Any]:
+    """LambdaFunction -> JSON object (inverse of _load_lambda_function)."""
+    return {"name": function.name, "arn": function.arn, "role_arn": function.role_arn}
+
+
+def _dump_ec2_instance(instance: Ec2Instance) -> dict[str, Any]:
+    """Ec2Instance -> JSON object; None written as null (D33)."""
+    return {
+        "instance_id": instance.instance_id,
+        "arn": instance.arn,
+        "instance_profile_arn": instance.instance_profile_arn,
+        "ssm_managed": instance.ssm_managed,
+    }
