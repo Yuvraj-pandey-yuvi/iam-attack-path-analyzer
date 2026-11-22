@@ -155,3 +155,34 @@ def _check_object(
     unknown = sorted(data.keys() - required - optional)
     if unknown:
         raise ValueError(f"{who}: unknown field(s): {', '.join(unknown)}")
+
+
+def _require_string(value: Any, who: str, field_name: str) -> str:
+    """Required JSON text field: must be a non-empty string (D31)."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{who}: {field_name} must be non-empty text, got {value!r}")
+    return value
+
+
+INLINE_POLICY_FIELDS = frozenset({"name", "document"})
+
+
+def _load_inline_policies(value: Any, who: str) -> tuple[InlinePolicy, ...]:
+    """JSON list of {"name", "document"} objects -> tuple of InlinePolicy (D31)."""
+    if not isinstance(value, list):
+        raise ValueError(
+            f"{who}: inline_policies must be a list, got {type(value).__name__}"
+        )
+    policies = []
+    for position, item in enumerate(value):
+        label = f"{who} inline_policies[{position}]"
+        _check_object(item, label, INLINE_POLICY_FIELDS, frozenset())
+        name = _require_string(item["name"], label, "name")
+        document = item["document"]
+        if not isinstance(document, dict):
+            raise ValueError(
+                f"{who} inline policy {name}: document must be a JSON object, "
+                f"got {type(document).__name__}"
+            )
+        policies.append(InlinePolicy(name=name, document=document))
+    return tuple(policies)

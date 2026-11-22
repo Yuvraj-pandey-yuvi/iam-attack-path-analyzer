@@ -5,9 +5,12 @@ import re
 import pytest
 
 from iampath.snapshot import (
+    InlinePolicy,
     _check_object,
+    _load_inline_policies,
     _optional_bool,
     _optional_key_count,
+    _require_string,
     _string_tuple,
 )
 
@@ -181,3 +184,90 @@ def test_check_object_accepts_known_keys(data):
 def test_check_object_rejects(data, message):
     with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
         _check_object(data, POSITION, REQUIRED, OPTIONAL)
+
+
+EC2_DOC = {"Statement": [{"Effect": "Allow", "Action": "ec2:*", "Resource": "*"}]}
+
+
+def test_require_string_accepts_text():
+    assert _require_string("erin", POSITION, "name") == "erin"
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        pytest.param(
+            42,
+            "users[0]: name must be non-empty text, got 42",
+            id="number",
+        ),
+        pytest.param(
+            "",
+            "users[0]: name must be non-empty text, got ''",
+            id="empty",
+        ),
+        pytest.param(
+            None,
+            "users[0]: name must be non-empty text, got None",
+            id="null",
+        ),
+    ],
+)
+def test_require_string_rejects(value, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _require_string(value, POSITION, "name")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param([], (), id="none"),
+        pytest.param(
+            [{"name": "Ec2", "document": EC2_DOC}],
+            (InlinePolicy(name="Ec2", document=EC2_DOC),),
+            id="one",
+        ),
+        pytest.param(
+            [{"name": "Odd", "document": {"Statement": "not checked here"}}],
+            (InlinePolicy(name="Odd", document={"Statement": "not checked here"}),),
+            id="contents-stay-raw",
+        ),
+    ],
+)
+def test_inline_policies_load(value, expected):
+    assert _load_inline_policies(value, WHO) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        pytest.param(
+            "Ec2",
+            "user/erin: inline_policies must be a list, got str",
+            id="not-a-list",
+        ),
+        pytest.param(
+            ["Ec2"],
+            "user/erin inline_policies[0]: must be a JSON object, got str",
+            id="item-not-object",
+        ),
+        pytest.param(
+            [{"name": "Ec2"}],
+            "user/erin inline_policies[0]: missing required field(s): document",
+            id="no-document",
+        ),
+        pytest.param(
+            [{"name": "", "document": EC2_DOC}],
+            "user/erin inline_policies[0]: name must be non-empty text, got ''",
+            id="empty-name",
+        ),
+        pytest.param(
+            [{"name": "Ec2", "document": ["Statement"]}],
+            "user/erin inline policy Ec2: document must be a JSON object, got list",
+            id="document-not-object",
+        ),
+    ],
+)
+def test_inline_policies_reject(value, message):
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        _load_inline_policies(value, WHO)
