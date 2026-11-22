@@ -573,3 +573,35 @@ def _dump_ec2_instance(instance: Ec2Instance) -> dict[str, Any]:
         "instance_profile_arn": instance.instance_profile_arn,
         "ssm_managed": instance.ssm_managed,
     }
+
+
+def snapshot_to_dict(snapshot: Snapshot) -> dict[str, Any]:
+    """Snapshot -> plain JSON-ready dict; load_snapshot reverses it (D32, D33)."""
+    policy_arns = {policy.arn for policy in snapshot.managed_policies}
+    orphans = sorted(snapshot.inactive_versions_by_arn.keys() - policy_arns)
+    if orphans:
+        raise ValueError(
+            "snapshot: inactive versions for policies not in the snapshot: "
+            + ", ".join(orphans)
+        )
+    return {
+        "account_id": snapshot.account_id,
+        "users": [_dump_user(user) for user in snapshot.users],
+        "groups": [_dump_group(group) for group in snapshot.groups],
+        "roles": [_dump_role(role) for role in snapshot.roles],
+        "managed_policies": [
+            _dump_managed_policy(
+                policy, snapshot.inactive_versions_by_arn.get(policy.arn, ())
+            )
+            for policy in snapshot.managed_policies
+        ],
+        "instance_profiles": [
+            _dump_instance_profile(profile) for profile in snapshot.instance_profiles
+        ],
+        "lambda_functions": [
+            _dump_lambda_function(function) for function in snapshot.lambda_functions
+        ],
+        "ec2_instances": [
+            _dump_ec2_instance(instance) for instance in snapshot.ec2_instances
+        ],
+    }
