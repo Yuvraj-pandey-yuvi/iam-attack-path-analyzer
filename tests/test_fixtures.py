@@ -1,10 +1,13 @@
 """Fixture discovery and the fixture runner (Phase 2 step 2)."""
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+
+from iampath.rules import RULE_KINDS
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 REQUIRED_FILES = ("snapshot.json", "expected.json")
@@ -84,6 +87,24 @@ def check_keys(value: object, required_keys: frozenset[str], where: str) -> dict
     return value
 
 
+def read_rules(value: object, where: str) -> frozenset[int]:
+    if not isinstance(value, list):
+        raise ValueError(f"{where}: must be an array, got {json_type_name(value)}")
+    if not value:
+        raise ValueError(f"{where}: must list at least one rule")
+    for position, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise ValueError(
+                f"{where}[{position}]: must be a whole number, got {json.dumps(item)}"
+            )
+        if item not in RULE_KINDS:
+            raise ValueError(f"{where}[{position}]: unknown rule {item}")
+    duplicates = sorted({item for item in value if value.count(item) > 1})
+    if duplicates:
+        raise ValueError(f"{where}: duplicate rules {duplicates}")
+    return frozenset(value)
+
+
 def make_fixture_folder(root: Path, name: str, files: tuple[str, ...]) -> None:
     folder = root / name
     folder.mkdir()
@@ -155,3 +176,27 @@ def test_check_keys_rejects(value, message):
 def test_check_keys_returns_the_same_dict():
     value = {"from": "a", "to": "b", "kind": "grant", "rule": 3}
     assert check_keys(value, EDGE_KEYS, "where") is value
+
+
+READ_RULES_FAILURES = [
+    pytest.param("3", "rules: must be an array, got string", id="not-array"),
+    pytest.param([], "rules: must list at least one rule", id="empty"),
+    pytest.param([3, True], "rules[1]: must be a whole number, got true", id="bool"),
+    pytest.param([3.0], "rules[0]: must be a whole number, got 3.0", id="float"),
+    pytest.param(["3"], 'rules[0]: must be a whole number, got "3"', id="string"),
+    pytest.param([0], "rules[0]: unknown rule 0", id="zero"),
+    pytest.param([22], "rules[0]: unknown rule 22", id="too-big"),
+    pytest.param([10, 3, 10, 3], "rules: duplicate rules [3, 10]", id="duplicates"),
+]
+
+
+@pytest.mark.parametrize(("value", "message"), READ_RULES_FAILURES)
+def test_read_rules_rejects(value, message):
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        read_rules(value, "rules")
+
+
+def test_read_rules_returns_a_frozenset():
+    result = read_rules([10, 3], "rules")
+    assert isinstance(result, frozenset)
+    assert result == {3, 10}
