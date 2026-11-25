@@ -99,9 +99,27 @@ def read_rules(value: object, where: str) -> frozenset[int]:
             )
         if item not in RULE_KINDS:
             raise ValueError(f"{where}[{position}]: unknown rule {item}")
-    duplicates = sorted({item for item in value if value.count(item) > 1})
-    if duplicates:
-        raise ValueError(f"{where}: duplicate rules {duplicates}")
+    reject_duplicates(value, where, "rules")
+    return frozenset(value)
+
+
+def reject_duplicates(items: list, where: str, what: str) -> None:
+    repeated = sorted({item for item in items if items.count(item) > 1})
+    if repeated:
+        shown = ", ".join(json.dumps(item) for item in repeated)
+        raise ValueError(f"{where}: duplicate {what} [{shown}]")
+
+
+def read_names(value: object, where: str) -> frozenset[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{where}: must be an array, got {json_type_name(value)}")
+    for position, item in enumerate(value):
+        if not isinstance(item, str) or not item:
+            shown = json.dumps(item)
+            raise ValueError(
+                f"{where}[{position}]: must be a non-empty string, got {shown}"
+            )
+    reject_duplicates(value, where, "names")
     return frozenset(value)
 
 
@@ -200,3 +218,36 @@ def test_read_rules_returns_a_frozenset():
     result = read_rules([10, 3], "rules")
     assert isinstance(result, frozenset)
     assert result == {3, 10}
+
+
+READ_NAMES_FAILURES = [
+    pytest.param({"a": 1}, "admins: must be an array, got object", id="not-array"),
+    pytest.param(
+        ["role/A", 5], "admins[1]: must be a non-empty string, got 5", id="number"
+    ),
+    pytest.param(
+        [""], 'admins[0]: must be a non-empty string, got ""', id="empty-string"
+    ),
+    pytest.param([None], "admins[0]: must be a non-empty string, got null", id="null"),
+    pytest.param(
+        ["role/B", "role/A", "role/B", "role/A"],
+        'admins: duplicate names ["role/A", "role/B"]',
+        id="duplicates",
+    ),
+]
+
+
+@pytest.mark.parametrize(("value", "message"), READ_NAMES_FAILURES)
+def test_read_names_rejects(value, message):
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        read_names(value, "admins")
+
+
+def test_read_names_returns_a_frozenset():
+    result = read_names(["role/A", "user/b"], "admins")
+    assert isinstance(result, frozenset)
+    assert result == {"role/A", "user/b"}
+
+
+def test_read_names_allows_an_empty_list():
+    assert read_names([], "admins") == frozenset()
