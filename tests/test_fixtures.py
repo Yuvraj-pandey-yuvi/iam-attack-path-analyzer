@@ -87,38 +87,45 @@ def check_keys(value: object, required_keys: frozenset[str], where: str) -> dict
     return value
 
 
+def read_rule_number(value: object, where: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{where}: must be a whole number, got {json.dumps(value)}")
+    if value not in RULE_KINDS:
+        raise ValueError(f"{where}: unknown rule {value}")
+    return value
+
+
+def read_name(value: object, where: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"{where}: must be a non-empty string, got {json.dumps(value)}"
+        )
+    return value
+
+
 def read_rules(value: object, where: str) -> frozenset[int]:
     if not isinstance(value, list):
         raise ValueError(f"{where}: must be an array, got {json_type_name(value)}")
     if not value:
         raise ValueError(f"{where}: must list at least one rule")
     for position, item in enumerate(value):
-        if isinstance(item, bool) or not isinstance(item, int):
-            raise ValueError(
-                f"{where}[{position}]: must be a whole number, got {json.dumps(item)}"
-            )
-        if item not in RULE_KINDS:
-            raise ValueError(f"{where}[{position}]: unknown rule {item}")
+        read_rule_number(item, f"{where}[{position}]")
     reject_duplicates(value, where, "rules")
     return frozenset(value)
 
 
 def reject_duplicates(items: list, where: str, what: str) -> None:
-    repeated = sorted({item for item in items if items.count(item) > 1})
+    texts = [json.dumps(item, sort_keys=True) for item in items]
+    repeated = sorted({text for text in texts if texts.count(text) > 1})
     if repeated:
-        shown = ", ".join(json.dumps(item) for item in repeated)
-        raise ValueError(f"{where}: duplicate {what} [{shown}]")
+        raise ValueError(f"{where}: duplicate {what} [{', '.join(repeated)}]")
 
 
 def read_names(value: object, where: str) -> frozenset[str]:
     if not isinstance(value, list):
         raise ValueError(f"{where}: must be an array, got {json_type_name(value)}")
     for position, item in enumerate(value):
-        if not isinstance(item, str) or not item:
-            shown = json.dumps(item)
-            raise ValueError(
-                f"{where}[{position}]: must be a non-empty string, got {shown}"
-            )
+        read_name(item, f"{where}[{position}]")
     reject_duplicates(value, where, "names")
     return frozenset(value)
 
@@ -204,7 +211,7 @@ READ_RULES_FAILURES = [
     pytest.param(["3"], 'rules[0]: must be a whole number, got "3"', id="string"),
     pytest.param([0], "rules[0]: unknown rule 0", id="zero"),
     pytest.param([22], "rules[0]: unknown rule 22", id="too-big"),
-    pytest.param([10, 3, 10, 3], "rules: duplicate rules [3, 10]", id="duplicates"),
+    pytest.param([10, 3, 10, 3], "rules: duplicate rules [10, 3]", id="duplicates"),
 ]
 
 
@@ -251,3 +258,16 @@ def test_read_names_returns_a_frozenset():
 
 def test_read_names_allows_an_empty_list():
     assert read_names([], "admins") == frozenset()
+
+
+def test_reject_duplicates_ignores_key_order():
+    edges = [
+        {"from": "user/erin", "to": "user/frank", "kind": "grant", "rule": 3},
+        {"kind": "grant", "rule": 3, "from": "user/erin", "to": "user/frank"},
+    ]
+    message = (
+        'edges: duplicate edges [{"from": "user/erin", "kind": "grant", '
+        '"rule": 3, "to": "user/frank"}]'
+    )
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        reject_duplicates(edges, "edges", "edges")
