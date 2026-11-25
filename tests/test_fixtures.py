@@ -130,6 +130,35 @@ def read_names(value: object, where: str) -> frozenset[str]:
     return frozenset(value)
 
 
+EDGE_KINDS = frozenset(RULE_KINDS.values())
+
+
+def read_kind(value: object, where: str) -> str:
+    if not isinstance(value, str) or value not in EDGE_KINDS:
+        allowed = " or ".join(json.dumps(kind) for kind in sorted(EDGE_KINDS))
+        raise ValueError(f"{where}: must be {allowed}, got {json.dumps(value)}")
+    return value
+
+
+def read_edges(value: object, where: str) -> frozenset[ExpectedEdge]:
+    if not isinstance(value, list):
+        raise ValueError(f"{where}: must be an array, got {json_type_name(value)}")
+    edges = []
+    for position, item in enumerate(value):
+        item_where = f"{where}[{position}]"
+        edge = check_keys(item, EDGE_KEYS, item_where)
+        edges.append(
+            ExpectedEdge(
+                source=read_name(edge["from"], f"{item_where}.from"),
+                target=read_name(edge["to"], f"{item_where}.to"),
+                kind=read_kind(edge["kind"], f"{item_where}.kind"),
+                rule=read_rule_number(edge["rule"], f"{item_where}.rule"),
+            )
+        )
+    reject_duplicates(value, where, "edges")
+    return frozenset(edges)
+
+
 def make_fixture_folder(root: Path, name: str, files: tuple[str, ...]) -> None:
     folder = root / name
     folder.mkdir()
@@ -271,3 +300,68 @@ def test_reject_duplicates_ignores_key_order():
     )
     with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
         reject_duplicates(edges, "edges", "edges")
+
+
+GOOD_EDGE = {"from": "user/erin", "to": "user/frank", "kind": "grant", "rule": 3}
+
+READ_EDGES_FAILURES = [
+    pytest.param("x", "edges: must be an array, got string", id="not-array"),
+    pytest.param([5], "edges[0]: must be an object, got number", id="not-object"),
+    pytest.param(
+        [{"from": "a", "to": "b", "kind": "grant"}],
+        "edges[0]: missing keys ['rule']",
+        id="missing-key",
+    ),
+    pytest.param(
+        [{**GOOD_EDGE, "from": ""}],
+        'edges[0].from: must be a non-empty string, got ""',
+        id="empty-from",
+    ),
+    pytest.param(
+        [GOOD_EDGE, {**GOOD_EDGE, "to": 7}],
+        "edges[1].to: must be a non-empty string, got 7",
+        id="bad-to-second-edge",
+    ),
+    pytest.param(
+        [{**GOOD_EDGE, "kind": "Grant"}],
+        'edges[0].kind: must be "grant" or "reach", got "Grant"',
+        id="kind-wrong-case",
+    ),
+    pytest.param(
+        [{**GOOD_EDGE, "kind": []}],
+        'edges[0].kind: must be "grant" or "reach", got []',
+        id="kind-array",
+    ),
+    pytest.param(
+        [{**GOOD_EDGE, "rule": True}],
+        "edges[0].rule: must be a whole number, got true",
+        id="rule-bool",
+    ),
+    pytest.param(
+        [{**GOOD_EDGE, "rule": 99}],
+        "edges[0].rule: unknown rule 99",
+        id="rule-unknown",
+    ),
+    pytest.param(
+        [GOOD_EDGE, dict(GOOD_EDGE)],
+        'edges: duplicate edges [{"from": "user/erin", "kind": "grant", '
+        '"rule": 3, "to": "user/frank"}]',
+        id="duplicates",
+    ),
+]
+
+
+@pytest.mark.parametrize(("value", "message"), READ_EDGES_FAILURES)
+def test_read_edges_rejects(value, message):
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        read_edges(value, "edges")
+
+
+def test_read_edges_converts_each_edge():
+    assert read_edges([GOOD_EDGE], "edges") == frozenset(
+        {ExpectedEdge(source="user/erin", target="user/frank", kind="grant", rule=3)}
+    )
+
+
+def test_read_edges_allows_an_empty_list():
+    assert read_edges([], "edges") == frozenset()
