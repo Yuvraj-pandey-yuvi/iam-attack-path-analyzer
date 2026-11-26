@@ -1,0 +1,99 @@
+{
+  "account_id": "111122223333",
+  "users": [
+    {
+      "name": "erin",
+      "arn": "arn:aws:iam::111122223333:user/erin",
+      "inline_policies": [
+        {
+          "name": "assume-role-a",
+          "document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": "sts:AssumeRole",
+                "Resource": "arn:aws:iam::111122223333:role/RoleA"
+              }
+            ]
+          }
+        }
+      ],
+      "managed_arns": [],
+      "group_names": [],
+      "access_key_count": null,
+      "has_console_password": null
+    }
+  ],
+  "groups": [],
+  "roles": [
+    {
+      "name": "RoleA",
+      "arn": "arn:aws:iam::111122223333:role/RoleA",
+      "trust_document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "AWS": "arn:aws:iam::111122223333:user/erin"
+            },
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      },
+      "inline_policies": [
+        {
+          "name": "assume-admin-role",
+          "document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": "sts:AssumeRole",
+                "Resource": "arn:aws:iam::111122223333:role/AdminRole"
+              }
+            ]
+          }
+        }
+      ],
+      "managed_arns": []
+    },
+    {
+      "name": "AdminRole",
+      "arn": "arn:aws:iam::111122223333:role/AdminRole",
+      "trust_document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "AWS": "arn:aws:iam::111122223333:role/RoleA"
+            },
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      },
+      "inline_policies": [
+        {
+          "name": "full-admin",
+          "document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": "*",
+                "Resource": "*"
+              }
+            ]
+          }
+        }
+      ],
+      "managed_arns": []
+    }
+  ],
+  "managed_policies": [],
+  "instance_profiles": [],
+  "lambda_functions": [],
+  "ec2_instances": []
+}

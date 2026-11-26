@@ -1,0 +1,16 @@
+{
+  "rules": [14],
+  "edges": [
+    {"from": "user/erin", "to": "role/RoleA", "kind": "reach", "rule": 14},
+    {"from": "role/RoleA", "to": "role/AdminRole", "kind": "reach", "rule": 14}
+  ],
+  "admins": ["role/AdminRole"],
+  "shortest_paths": {
+    "user/erin": [["user/erin", "role/RoleA", "role/AdminRole"]],
+    "role/RoleA": [["role/RoleA", "role/AdminRole"]]
+  },
+  "can_reach": {
+    "user/erin": ["role/AdminRole", "role/RoleA"],
+    "role/RoleA": ["role/AdminRole"]
+  }
+}
