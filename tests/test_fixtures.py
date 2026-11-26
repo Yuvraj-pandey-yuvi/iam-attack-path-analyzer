@@ -2,7 +2,7 @@
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -212,6 +212,51 @@ def read_can_reach(value: object, where: str) -> dict[str, frozenset[str]]:
             )
         result[principal] = reached
     return result
+
+
+def describe_edge(edge: ExpectedEdge) -> str:
+    return f"{edge.source} -> {edge.target} (rule {edge.rule})"
+
+
+def describe_path(path: tuple[str, ...]) -> str:
+    return " -> ".join(path)
+
+
+def check_consistency(results: ExpectedResults, where: str) -> None:
+    problems = []
+    for edge in results.edges:
+        shown = describe_edge(edge)
+        rule_kind = RULE_KINDS[edge.rule]
+        if edge.kind != rule_kind:
+            problems.append(
+                f'edge {shown} has kind "{edge.kind}" but rule {edge.rule} '
+                f"is a {rule_kind} rule"
+            )
+        if edge.rule not in results.rules:
+            problems.append(
+                f"edge {shown} uses rule {edge.rule}, which is not in rules"
+            )
+    for principal, paths in results.shortest_paths.items():
+        label = f"shortest_paths[{json.dumps(principal)}]"
+        if principal in results.admins:
+            problems.append(f"{label}: {principal} is an admin; admins have no routes")
+        reachable = results.can_reach.get(principal, frozenset())
+        for path in paths:
+            shown = describe_path(path)
+            if path[0] != principal:
+                problems.append(f"{label}: route {shown} does not start at {principal}")
+            if path[-1] not in results.admins:
+                problems.append(f"{label}: route {shown} does not end at an admin")
+            if len(set(path)) != len(path):
+                problems.append(f"{label}: route {shown} visits an identity twice")
+            missing = sorted(set(path[1:]) - reachable)
+            if missing:
+                problems.append(
+                    f"{label}: route {shown} passes {', '.join(missing)}, "
+                    "missing from can_reach"
+                )
+    if problems:
+        raise ValueError(f"{where}: " + "; ".join(sorted(problems)))
 
 
 def make_fixture_folder(root: Path, name: str, files: tuple[str, ...]) -> None:
@@ -515,3 +560,134 @@ def test_read_can_reach_converts():
 
 def test_read_can_reach_allows_an_empty_object():
     assert read_can_reach({}, "can_reach") == {}
+
+
+BASE_RESULTS = ExpectedResults(
+    rules=frozenset({14}),
+    edges=frozenset(
+        {
+            ExpectedEdge("user/erin", "role/RoleA", "reach", 14),
+            ExpectedEdge("role/RoleA", "role/AdminRole", "reach", 14),
+        }
+    ),
+    admins=frozenset({"role/AdminRole"}),
+    shortest_paths={
+        "user/erin": frozenset({("user/erin", "role/RoleA", "role/AdminRole")}),
+        "role/RoleA": frozenset({("role/RoleA", "role/AdminRole")}),
+    },
+    can_reach={
+        "user/erin": frozenset({"role/RoleA", "role/AdminRole"}),
+        "role/RoleA": frozenset({"role/AdminRole"}),
+    },
+)
+
+
+def with_paths(principal: str, *paths: tuple[str, ...]) -> dict:
+    return {**BASE_RESULTS.shortest_paths, principal: frozenset(paths)}
+
+
+def with_reach(principal: str, *names: str) -> dict:
+    return {**BASE_RESULTS.can_reach, principal: frozenset(names)}
+
+
+def with_edge(edge: ExpectedEdge) -> frozenset:
+    return BASE_RESULTS.edges | {edge}
+
+
+CONSISTENCY_FAILURES = [
+    pytest.param(
+        replace(
+            BASE_RESULTS,
+            rules=frozenset({3, 14}),
+            edges=with_edge(ExpectedEdge("user/erin", "user/frank", "reach", 3)),
+        ),
+        'x: edge user/erin -> user/frank (rule 3) has kind "reach" '
+        "but rule 3 is a grant rule",
+        id="kind-mismatch",
+    ),
+    pytest.param(
+        replace(
+            BASE_RESULTS,
+            edges=with_edge(ExpectedEdge("user/erin", "user/frank", "reach", 10)),
+        ),
+        "x: edge user/erin -> user/frank (rule 10) uses rule 10, which is not in rules",
+        id="rule-not-in-rules",
+    ),
+    pytest.param(
+        replace(
+            BASE_RESULTS,
+            shortest_paths=with_paths("user/erin", ("role/RoleA", "role/AdminRole")),
+        ),
+        'x: shortest_paths["user/erin"]: route role/RoleA -> role/AdminRole '
+        "does not start at user/erin",
+        id="route-wrong-start",
+    ),
+    pytest.param(
+        replace(
+            BASE_RESULTS,
+            shortest_paths=with_paths("user/erin", ("user/erin", "role/RoleA")),
+        ),
+        'x: shortest_paths["user/erin"]: route user/erin -> role/RoleA '
+        "does not end at an admin",
+        id="route-wrong-end",
+    ),
+    pytest.param(
+        replace(
+            BASE_RESULTS,
+            admins=frozenset({"role/AdminRole", "role/OtherAdmin"}),
+            shortest_paths=with_paths(
+                "role/AdminRole", ("role/AdminRole", "role/OtherAdmin")
+            ),
+            can_reach=with_reach("role/AdminRole", "role/OtherAdmin"),
+        ),
+        'x: shortest_paths["role/AdminRole"]: role/AdminRole is an admin; '
+        "admins have no routes",
+        id="admin-has-routes",
+    ),
+    pytest.param(
+        replace(
+            BASE_RESULTS,
+            shortest_paths=with_paths(
+                "user/erin", ("user/erin", "role/RoleA", "user/erin", "role/AdminRole")
+            ),
+            can_reach=with_reach(
+                "user/erin", "user/erin", "role/RoleA", "role/AdminRole"
+            ),
+        ),
+        'x: shortest_paths["user/erin"]: route user/erin -> role/RoleA -> '
+        "user/erin -> role/AdminRole visits an identity twice",
+        id="route-repeats",
+    ),
+    pytest.param(
+        replace(BASE_RESULTS, can_reach=with_reach("user/erin", "role/AdminRole")),
+        'x: shortest_paths["user/erin"]: route user/erin -> role/RoleA -> '
+        "role/AdminRole passes role/RoleA, missing from can_reach",
+        id="missing-from-can-reach",
+    ),
+]
+
+
+@pytest.mark.parametrize(("results", "message"), CONSISTENCY_FAILURES)
+def test_check_consistency_rejects(results, message):
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        check_consistency(results, "x")
+
+
+def test_check_consistency_accepts_a_consistent_answer_key():
+    check_consistency(BASE_RESULTS, "x")
+
+
+def test_check_consistency_reports_every_problem_sorted():
+    results = replace(
+        BASE_RESULTS,
+        edges=with_edge(ExpectedEdge("user/erin", "user/frank", "reach", 10)),
+        shortest_paths=with_paths("user/erin", ("user/erin", "role/RoleA")),
+    )
+    message = (
+        "x: edge user/erin -> user/frank (rule 10) uses rule 10, "
+        "which is not in rules; "
+        'shortest_paths["user/erin"]: route user/erin -> role/RoleA '
+        "does not end at an admin"
+    )
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        check_consistency(results, "x")
