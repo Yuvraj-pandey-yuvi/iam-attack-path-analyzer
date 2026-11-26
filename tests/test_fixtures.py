@@ -159,6 +159,61 @@ def read_edges(value: object, where: str) -> frozenset[ExpectedEdge]:
     return frozenset(edges)
 
 
+def read_path(value: object, where: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{where}: must be an array, got {json_type_name(value)}")
+    if len(value) < 2:
+        raise ValueError(f"{where}: a path needs at least 2 steps, got {len(value)}")
+    for position, step in enumerate(value):
+        read_name(step, f"{where}[{position}]")
+    return tuple(value)
+
+
+def check_principal_object(value: object, where: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"{where}: must be an object, got {json_type_name(value)}")
+    for principal in value:
+        read_name(principal, f"{where} key")
+    return value
+
+
+def read_shortest_paths(
+    value: object, where: str
+) -> dict[str, frozenset[tuple[str, ...]]]:
+    result = {}
+    for principal, paths in check_principal_object(value, where).items():
+        entry_where = f"{where}[{json.dumps(principal)}]"
+        if not isinstance(paths, list):
+            raise ValueError(
+                f"{entry_where}: must be an array, got {json_type_name(paths)}"
+            )
+        if not paths:
+            raise ValueError(
+                f"{entry_where}: must list at least one path "
+                "(leave the principal out if it has none)"
+            )
+        result[principal] = frozenset(
+            read_path(path, f"{entry_where}[{position}]")
+            for position, path in enumerate(paths)
+        )
+        reject_duplicates(paths, entry_where, "paths")
+    return result
+
+
+def read_can_reach(value: object, where: str) -> dict[str, frozenset[str]]:
+    result = {}
+    for principal, names in check_principal_object(value, where).items():
+        entry_where = f"{where}[{json.dumps(principal)}]"
+        reached = read_names(names, entry_where)
+        if not reached:
+            raise ValueError(
+                f"{entry_where}: must list at least one name "
+                "(leave the principal out if it reaches nobody)"
+            )
+        result[principal] = reached
+    return result
+
+
 def make_fixture_folder(root: Path, name: str, files: tuple[str, ...]) -> None:
     folder = root / name
     folder.mkdir()
@@ -365,3 +420,98 @@ def test_read_edges_converts_each_edge():
 
 def test_read_edges_allows_an_empty_list():
     assert read_edges([], "edges") == frozenset()
+
+
+SHORTEST_PATHS_FAILURES = [
+    pytest.param([], "shortest_paths: must be an object, got array", id="not-object"),
+    pytest.param(
+        {"": [["a", "b"]]},
+        'shortest_paths key: must be a non-empty string, got ""',
+        id="empty-key",
+    ),
+    pytest.param(
+        {"user/erin": "x"},
+        'shortest_paths["user/erin"]: must be an array, got string',
+        id="entry-not-array",
+    ),
+    pytest.param(
+        {"user/frank": []},
+        'shortest_paths["user/frank"]: must list at least one path '
+        "(leave the principal out if it has none)",
+        id="empty-entry",
+    ),
+    pytest.param(
+        {"user/erin": ["user/erin"]},
+        'shortest_paths["user/erin"][0]: must be an array, got string',
+        id="path-not-array",
+    ),
+    pytest.param(
+        {"user/erin": [["user/erin"]]},
+        'shortest_paths["user/erin"][0]: a path needs at least 2 steps, got 1',
+        id="path-too-short",
+    ),
+    pytest.param(
+        {"user/erin": [["user/erin", 5]]},
+        'shortest_paths["user/erin"][0][1]: must be a non-empty string, got 5',
+        id="bad-step",
+    ),
+    pytest.param(
+        {"user/erin": [["user/erin", "role/A"], ["user/erin", "role/A"]]},
+        'shortest_paths["user/erin"]: duplicate paths [["user/erin", "role/A"]]',
+        id="duplicate-paths",
+    ),
+]
+
+
+@pytest.mark.parametrize(("value", "message"), SHORTEST_PATHS_FAILURES)
+def test_read_shortest_paths_rejects(value, message):
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        read_shortest_paths(value, "shortest_paths")
+
+
+def test_read_shortest_paths_converts_paths_to_tuples():
+    value = {"user/erin": [["user/erin", "role/A"]]}
+    result = read_shortest_paths(value, "shortest_paths")
+    assert result == {"user/erin": frozenset({("user/erin", "role/A")})}
+    assert isinstance(result["user/erin"], frozenset)
+
+
+def test_read_shortest_paths_allows_an_empty_object():
+    assert read_shortest_paths({}, "shortest_paths") == {}
+
+
+CAN_REACH_FAILURES = [
+    pytest.param("x", "can_reach: must be an object, got string", id="not-object"),
+    pytest.param(
+        {"user/erin": ["role/A", ""]},
+        'can_reach["user/erin"][1]: must be a non-empty string, got ""',
+        id="bad-name",
+    ),
+    pytest.param(
+        {"user/frank": []},
+        'can_reach["user/frank"]: must list at least one name '
+        "(leave the principal out if it reaches nobody)",
+        id="empty-entry",
+    ),
+    pytest.param(
+        {"user/erin": ["role/A", "role/A"]},
+        'can_reach["user/erin"]: duplicate names ["role/A"]',
+        id="duplicates",
+    ),
+]
+
+
+@pytest.mark.parametrize(("value", "message"), CAN_REACH_FAILURES)
+def test_read_can_reach_rejects(value, message):
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        read_can_reach(value, "can_reach")
+
+
+def test_read_can_reach_converts():
+    result = read_can_reach({"user/erin": ["role/B", "role/A"]}, "can_reach")
+    assert result == {"user/erin": frozenset({"role/A", "role/B"})}
+    assert isinstance(result["user/erin"], frozenset)
+
+
+def test_read_can_reach_allows_an_empty_object():
+    assert read_can_reach({}, "can_reach") == {}
