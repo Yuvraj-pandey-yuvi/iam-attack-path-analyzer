@@ -259,6 +259,35 @@ def check_consistency(results: ExpectedResults, where: str) -> None:
         raise ValueError(f"{where}: " + "; ".join(sorted(problems)))
 
 
+def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    reject_duplicates([key for key, _ in pairs], "JSON object", "keys")
+    return dict(pairs)
+
+
+def read_expected(path: Path) -> ExpectedResults:
+    label = f"{path.parent.name}/{path.name}"
+    try:
+        data = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys
+        )
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{label}: not valid JSON: {error}") from error
+    except ValueError as error:
+        raise ValueError(f"{label}: {error}") from error
+    data = check_keys(data, TOP_LEVEL_KEYS, label)
+    results = ExpectedResults(
+        rules=read_rules(data["rules"], f"{label}: rules"),
+        edges=read_edges(data["edges"], f"{label}: edges"),
+        admins=read_names(data["admins"], f"{label}: admins"),
+        shortest_paths=read_shortest_paths(
+            data["shortest_paths"], f"{label}: shortest_paths"
+        ),
+        can_reach=read_can_reach(data["can_reach"], f"{label}: can_reach"),
+    )
+    check_consistency(results, label)
+    return results
+
+
 def make_fixture_folder(root: Path, name: str, files: tuple[str, ...]) -> None:
     folder = root / name
     folder.mkdir()
@@ -691,3 +720,82 @@ def test_check_consistency_reports_every_problem_sorted():
     )
     with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
         check_consistency(results, "x")
+
+
+VALID_EXPECTED = {
+    "rules": [14],
+    "edges": [
+        {"from": "user/erin", "to": "role/RoleA", "kind": "reach", "rule": 14},
+        {"from": "role/RoleA", "to": "role/AdminRole", "kind": "reach", "rule": 14},
+    ],
+    "admins": ["role/AdminRole"],
+    "shortest_paths": {
+        "user/erin": [["user/erin", "role/RoleA", "role/AdminRole"]],
+        "role/RoleA": [["role/RoleA", "role/AdminRole"]],
+    },
+    "can_reach": {
+        "user/erin": ["role/RoleA", "role/AdminRole"],
+        "role/RoleA": ["role/AdminRole"],
+    },
+}
+VALID_TEXT = json.dumps(VALID_EXPECTED)
+
+
+def write_expected(root: Path, text: str) -> Path:
+    folder = root / "case"
+    folder.mkdir()
+    path = folder / "expected.json"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_read_expected_matches_the_hand_built_results(tmp_path):
+    assert read_expected(write_expected(tmp_path, VALID_TEXT)) == BASE_RESULTS
+
+
+def test_read_expected_reports_broken_json(tmp_path):
+    prefix = re.escape("case/expected.json: not valid JSON: ")
+    with pytest.raises(ValueError, match="^" + prefix):
+        read_expected(write_expected(tmp_path, "{"))
+
+
+READ_EXPECTED_FAILURES = [
+    pytest.param(
+        '{"rules": [3], ' + VALID_TEXT[1:],
+        'case/expected.json: JSON object: duplicate keys ["rules"]',
+        id="duplicate-top-key",
+    ),
+    pytest.param(
+        VALID_TEXT.replace('"can_reach": {', '"can_reach": {"user/erin": ["role/A"], '),
+        'case/expected.json: JSON object: duplicate keys ["user/erin"]',
+        id="duplicate-nested-key",
+    ),
+    pytest.param(
+        "{}",
+        "case/expected.json: missing keys "
+        "['admins', 'can_reach', 'edges', 'rules', 'shortest_paths']",
+        id="missing-keys",
+    ),
+    pytest.param(
+        json.dumps({**VALID_EXPECTED, "rules": []}),
+        "case/expected.json: rules: must list at least one rule",
+        id="reader-error",
+    ),
+    pytest.param(
+        json.dumps(
+            {
+                **VALID_EXPECTED,
+                "shortest_paths": {"user/erin": [["user/erin", "role/RoleA"]]},
+            }
+        ),
+        'case/expected.json: shortest_paths["user/erin"]: '
+        "route user/erin -> role/RoleA does not end at an admin",
+        id="consistency-error",
+    ),
+]
+
+
+@pytest.mark.parametrize(("text", "message"), READ_EXPECTED_FAILURES)
+def test_read_expected_rejects(tmp_path, text, message):
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        read_expected(write_expected(tmp_path, text))
