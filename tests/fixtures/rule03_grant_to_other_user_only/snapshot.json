@@ -1,0 +1,43 @@
+{
+  "account_id": "111122223333",
+  "users": [
+    {
+      "name": "erin",
+      "arn": "arn:aws:iam::111122223333:user/erin",
+      "inline_policies": [
+        {
+          "name": "attach-to-frank",
+          "document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": "iam:AttachUserPolicy",
+                "Resource": "arn:aws:iam::111122223333:user/frank"
+              }
+            ]
+          }
+        }
+      ],
+      "managed_arns": [],
+      "group_names": [],
+      "access_key_count": null,
+      "has_console_password": null
+    },
+    {
+      "name": "frank",
+      "arn": "arn:aws:iam::111122223333:user/frank",
+      "inline_policies": [],
+      "managed_arns": [],
+      "group_names": [],
+      "access_key_count": null,
+      "has_console_password": null
+    }
+  ],
+  "groups": [],
+  "roles": [],
+  "managed_policies": [],
+  "instance_profiles": [],
+  "lambda_functions": [],
+  "ec2_instances": []
+}

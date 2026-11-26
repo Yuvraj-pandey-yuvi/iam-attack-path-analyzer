@@ -1,0 +1,7 @@
+{
+  "rules": [3],
+  "edges": [{"from": "user/erin", "to": "user/frank", "kind": "grant", "rule": 3}],
+  "admins": [],
+  "shortest_paths": {},
+  "can_reach": {}
+}
