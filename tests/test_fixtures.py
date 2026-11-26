@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from iampath.rules import RULE_KINDS
+from iampath.snapshot import Snapshot, load_snapshot
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 REQUIRED_FILES = ("snapshot.json", "expected.json")
@@ -286,6 +287,61 @@ def read_expected(path: Path) -> ExpectedResults:
     )
     check_consistency(results, label)
     return results
+
+
+SECTIONS = ("structure", "snapshot", "edges", "admins", "shortest_paths", "can_reach")
+NOT_BUILT_YET = {
+    "edges": "rules not built yet (steps 4-7)",
+    "admins": "admin marking not built yet (step 9)",
+    "shortest_paths": "path search not built yet (step 10)",
+    "can_reach": "path search not built yet (step 10)",
+}
+
+
+def read_snapshot_file(path: Path) -> Snapshot:
+    label = f"{path.parent.name}/{path.name}"
+    try:
+        data = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys
+        )
+        return load_snapshot(data)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{label}: not valid JSON: {error}") from error
+    except ValueError as error:
+        raise ValueError(f"{label}: {error}") from error
+
+
+def fixture_rows(root: Path) -> list:
+    rows = []
+    for found in discover_fixtures(root):
+        sections = ("structure",) if found.problems else SECTIONS
+        rows.extend(
+            pytest.param(found, section, id=f"{found.name}-{section}")
+            for section in sections
+        )
+    return rows
+
+
+def check_section(found: FoundFixture, section: str) -> None:
+    if found.problems:
+        raise ValueError(f"{found.name}: " + "; ".join(found.problems))
+    expected_path = found.path / "expected.json"
+    snapshot_path = found.path / "snapshot.json"
+    if section == "structure":
+        read_expected(expected_path)
+        return
+    try:
+        read_expected(expected_path)
+    except ValueError:
+        pytest.skip("answer key invalid: see structure row")
+    if section == "snapshot":
+        read_snapshot_file(snapshot_path)
+        return
+    try:
+        read_snapshot_file(snapshot_path)
+    except ValueError:
+        pytest.skip("snapshot invalid: see snapshot row")
+    pytest.skip(NOT_BUILT_YET[section])
 
 
 def make_fixture_folder(root: Path, name: str, files: tuple[str, ...]) -> None:
@@ -799,3 +855,82 @@ READ_EXPECTED_FAILURES = [
 def test_read_expected_rejects(tmp_path, text, message):
     with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
         read_expected(write_expected(tmp_path, text))
+
+
+MINIMAL_SNAPSHOT = json.dumps({"account_id": "111122223333"})
+BROKEN_SNAPSHOT = json.dumps({"account_id": "abc"})
+BROKEN_EXPECTED = json.dumps({**VALID_EXPECTED, "rules": []})
+
+
+def make_case(root: Path, expected_text: str, snapshot_text: str) -> FoundFixture:
+    folder = root / "case"
+    folder.mkdir()
+    (folder / "expected.json").write_text(expected_text, encoding="utf-8")
+    (folder / "snapshot.json").write_text(snapshot_text, encoding="utf-8")
+    return discover_fixtures(root)[0]
+
+
+def test_fixture_rows_give_broken_items_only_a_structure_row(tmp_path):
+    make_fixture_folder(tmp_path, "a_case", REQUIRED_FILES)
+    make_fixture_folder(tmp_path, "b_case", ("snapshot.json",))
+    assert [row.id for row in fixture_rows(tmp_path)] == [
+        "a_case-structure",
+        "a_case-snapshot",
+        "a_case-edges",
+        "a_case-admins",
+        "a_case-shortest_paths",
+        "a_case-can_reach",
+        "b_case-structure",
+    ]
+
+
+def test_check_section_fails_a_broken_folder(tmp_path):
+    make_fixture_folder(tmp_path, "case", ("snapshot.json",))
+    found = discover_fixtures(tmp_path)[0]
+    with pytest.raises(ValueError, match=r"^case: missing expected\.json$"):
+        check_section(found, "structure")
+
+
+def test_check_section_structure_passes_a_valid_fixture(tmp_path):
+    check_section(make_case(tmp_path, VALID_TEXT, MINIMAL_SNAPSHOT), "structure")
+
+
+def test_check_section_structure_fails_a_bad_answer_key(tmp_path):
+    found = make_case(tmp_path, BROKEN_EXPECTED, MINIMAL_SNAPSHOT)
+    message = "case/expected.json: rules: must list at least one rule"
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        check_section(found, "structure")
+
+
+def test_check_section_skips_later_rows_after_a_bad_answer_key(tmp_path):
+    found = make_case(tmp_path, BROKEN_EXPECTED, MINIMAL_SNAPSHOT)
+    with pytest.raises(pytest.skip.Exception, match="answer key invalid"):
+        check_section(found, "snapshot")
+
+
+def test_check_section_snapshot_passes_a_valid_snapshot(tmp_path):
+    check_section(make_case(tmp_path, VALID_TEXT, MINIMAL_SNAPSHOT), "snapshot")
+
+
+def test_check_section_snapshot_fails_a_bad_snapshot(tmp_path):
+    found = make_case(tmp_path, VALID_TEXT, BROKEN_SNAPSHOT)
+    with pytest.raises(ValueError, match="^" + re.escape("case/snapshot.json: ")):
+        check_section(found, "snapshot")
+
+
+def test_check_section_skips_later_rows_after_a_bad_snapshot(tmp_path):
+    found = make_case(tmp_path, VALID_TEXT, BROKEN_SNAPSHOT)
+    with pytest.raises(pytest.skip.Exception, match="snapshot invalid"):
+        check_section(found, "edges")
+
+
+@pytest.mark.parametrize("section", sorted(NOT_BUILT_YET))
+def test_check_section_skips_sections_not_built_yet(tmp_path, section):
+    found = make_case(tmp_path, VALID_TEXT, MINIMAL_SNAPSHOT)
+    with pytest.raises(pytest.skip.Exception, match=re.escape(NOT_BUILT_YET[section])):
+        check_section(found, section)
+
+
+@pytest.mark.parametrize(("found", "section"), fixture_rows(FIXTURES_DIR))
+def test_fixture(found, section):
+    check_section(found, section)
